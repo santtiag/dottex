@@ -134,7 +134,8 @@
     try {
       const page = await doc.getPage(Number(holder.dataset.page));
       const vp = page.getViewport({ scale });
-      const dpr = window.devicePixelRatio || 1;
+      // ponytail: mínimo 2x — WebKitGTK reporta dpr=1 en HiDPI y el PDF sale borroso
+      const dpr = Math.max(window.devicePixelRatio || 1, 2);
       const canvas = document.createElement("canvas");
       canvas.width = Math.floor(vp.width * dpr);
       canvas.height = Math.floor(vp.height * dpr);
@@ -224,11 +225,11 @@
     flex: none;
     position: relative; /* ancla del marcador SyncTeX */
   }
-  /* con tema oscuro, invierte los colores del PDF (opcional en Configuración) */
-  :global(.dark) .viewer.invert .pdf-scroll :global(canvas) {
+  /* invierte los colores del PDF (opcional en Configuración), en cualquier tema */
+  .viewer.invert .pdf-scroll :global(canvas) {
     filter: invert(0.93) hue-rotate(180deg);
   }
-  :global(.dark) .viewer.invert .pdf-scroll :global(.page) {
+  .viewer.invert .pdf-scroll :global(.page) {
     background: #121316;
   }
   .pdf-scroll :global(.sync-mark) {

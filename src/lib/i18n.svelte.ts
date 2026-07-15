@@ -130,7 +130,7 @@ const es = {
   themeAuto: "Automático (sistema)",
   themeDark: "Oscuro",
   pdfInvert: "PDF en modo oscuro",
-  pdfInvertDesc: "Invierte los colores de la vista previa con tema oscuro",
+  pdfInvertDesc: "Invierte los colores de la vista previa (funciona en cualquier tema)",
 
   // Configuración: idioma
   uiLanguage: "Idioma de la aplicación",
@@ -254,7 +254,7 @@ const en: typeof es = {
   themeAuto: "Automatic (system)",
   themeDark: "Dark",
   pdfInvert: "PDF in dark mode",
-  pdfInvertDesc: "Inverts the preview colors with the dark theme",
+  pdfInvertDesc: "Inverts the preview colors (works in any theme)",
 
   uiLanguage: "Application language",
   uiLanguageDesc: "Interface language",

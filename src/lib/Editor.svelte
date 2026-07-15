@@ -49,6 +49,7 @@
     onSave,
     onDirty,
     onIdle,
+    onCompile,
     onCursor,
     onSyncClick,
   }: {
@@ -61,6 +62,8 @@
     onDirty: () => void;
     /** ~450ms sin teclear con vista previa automática activa */
     onIdle: (text: string) => void;
+    /** Mod-Enter: guardar y compilar */
+    onCompile: (text: string) => void;
     onCursor: (line: number) => void;
     /** Ctrl/Cmd+clic: sincronizar con el PDF (SyncTeX forward) */
     onSyncClick: (line: number) => void;
@@ -119,6 +122,14 @@
             key: "Mod-s",
             run: (v) => {
               onSave(v.state.doc.toString());
+              return true;
+            },
+          },
+          {
+            // antes que defaultKeymap: sin esto Enter inserta salto de línea
+            key: "Mod-Enter",
+            run: (v) => {
+              onCompile(v.state.doc.toString());
               return true;
             },
           },

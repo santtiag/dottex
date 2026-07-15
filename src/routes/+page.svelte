@@ -15,6 +15,7 @@
     reloadTree,
     requestCompile,
     saveActive,
+    setRootFile,
     settings,
     syncFromPdf,
     syncToPdf,
@@ -79,10 +80,25 @@
     return () => unlisten.then((fns) => fns.forEach((f) => f()));
   });
 
+  /** Ctrl+Enter: guarda, fija el archivo activo como raíz si no hay una y compila. */
+  async function compileActive(text?: string) {
+    if (!app.project) return;
+    if (text !== undefined) await saveActive(text);
+    if (!app.project.root_file && app.active?.path.endsWith(".tex")) {
+      await setRootFile(app.active.path); // setRootFile ya dispara la compilación
+    } else {
+      requestCompile();
+    }
+  }
+
   function onKeydown(e: KeyboardEvent) {
-    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    if (e.key === "Enter") {
       e.preventDefault();
-      if (app.project) requestCompile();
+      compileActive();
+    } else if (e.key === ",") {
+      e.preventDefault();
+      settingsOpen = !settingsOpen;
     }
   }
 
@@ -174,12 +190,15 @@
       <button class="tb" onclick={exportPdf} disabled={!app.pdf} title={t("exportPdfTitle")}>⬇ PDF</button>
       <button class="tb" title={t("togglePdf")} onclick={() => (pdfOpen = !pdfOpen)}>◫</button>
     {/if}
-    <button class="tb" title={t("settings")} aria-label={t("settings")} onclick={() => (settingsOpen = true)}>
-      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round">
-        <path d="M2 4h4.5M9 4h5M2 8h7M11.5 8h2.5M2 12h2.5M7 12h7" />
-        <circle cx="7.5" cy="4" r="1.6" />
-        <circle cx="10" cy="8" r="1.6" />
-        <circle cx="4.5" cy="12" r="1.6" />
+    <button
+      class="tb"
+      title="{t('settings')} (Ctrl+,)"
+      aria-label={t("settings")}
+      onclick={() => (settingsOpen = true)}
+    >
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+        <circle cx="12" cy="12" r="3" />
       </svg>
     </button>
     {#if !isMac}
@@ -260,6 +279,7 @@
               if (app.auto) app.typing = true;
             }}
             onIdle={autoCompile}
+            onCompile={compileActive}
             onCursor={(l) => (app.cursorLine = l)}
             onSyncClick={(l) => syncToPdf(l)}
           />
@@ -559,9 +579,45 @@
   .autolbl {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 6px;
     color: var(--fg-dim);
     cursor: pointer;
+  }
+  /* interruptor (toggle) a partir del checkbox nativo, como en Configuración */
+  .autolbl input {
+    appearance: none;
+    -webkit-appearance: none;
+    position: relative;
+    width: 28px;
+    height: 16px;
+    border-radius: 999px;
+    background: var(--border);
+    cursor: pointer;
+    flex: none;
+    margin: 0;
+    transition: background 0.15s ease;
+  }
+  .autolbl input::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.3);
+    transition: transform 0.15s ease;
+  }
+  .autolbl input:checked {
+    background: var(--accent);
+  }
+  .autolbl input:checked::after {
+    transform: translateX(12px);
+  }
+  .autolbl input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
   .toast {
     position: fixed;
