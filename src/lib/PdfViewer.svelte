@@ -66,6 +66,12 @@
     if (source) load(source.path, source.version);
   });
 
+  // repinta al alternar la inversión (ahora se hornea en los píxeles del canvas)
+  $effect(() => {
+    settings.pdfInvert;
+    if (doc) render();
+  });
+
   onDestroy(() => {
     observer?.disconnect();
     task?.destroy();
@@ -134,8 +140,11 @@
     try {
       const page = await doc.getPage(Number(holder.dataset.page));
       const vp = page.getViewport({ scale });
-      // ponytail: mínimo 2x — WebKitGTK reporta dpr=1 en HiDPI y el PDF sale borroso
-      const dpr = Math.max(window.devicePixelRatio || 1, 2);
+      // El AppImage corre bajo X11 y WebKitGTK no refleja el escalado del
+      // compositor en devicePixelRatio: allí forzamos 2x para que no salga
+      // borroso; en dev/nativo usamos el dpr real (más nítido y menos memoria).
+      const floor = (window as unknown as { __DOTTEX_APPIMAGE__?: boolean }).__DOTTEX_APPIMAGE__ ? 2 : 1;
+      const dpr = Math.max(window.devicePixelRatio || 1, floor);
       const canvas = document.createElement("canvas");
       canvas.width = Math.floor(vp.width * dpr);
       canvas.height = Math.floor(vp.height * dpr);
@@ -145,7 +154,21 @@
       holder.style.height = canvas.style.height;
       const ctx = canvas.getContext("2d")!;
       await page.render({ canvas, canvasContext: ctx, viewport: vp, transform: [dpr, 0, 0, dpr, 0, 0] }).promise;
-      holder.replaceChildren(canvas);
+      // "modo oscuro" horneado en los píxeles: el filtro CSS sobre el <canvas>
+      // se rasteriza a 1x en WebKitGTK y difumina el PDF.
+      if (settings.pdfInvert) {
+        const inv = document.createElement("canvas");
+        inv.width = canvas.width;
+        inv.height = canvas.height;
+        inv.style.width = canvas.style.width;
+        inv.style.height = canvas.style.height;
+        const ictx = inv.getContext("2d")!;
+        ictx.filter = "invert(0.93) hue-rotate(180deg)";
+        ictx.drawImage(canvas, 0, 0);
+        holder.replaceChildren(inv);
+      } else {
+        holder.replaceChildren(canvas);
+      }
     } catch (e) {
       console.error("PDF page:", e);
     }
@@ -225,10 +248,8 @@
     flex: none;
     position: relative; /* ancla del marcador SyncTeX */
   }
-  /* invierte los colores del PDF (opcional en Configuración), en cualquier tema */
-  .viewer.invert .pdf-scroll :global(canvas) {
-    filter: invert(0.93) hue-rotate(180deg);
-  }
+  /* la inversión se hornea en el canvas (paintPage); aquí solo el fondo oscuro
+     del marco de página para que no destaque en blanco */
   .viewer.invert .pdf-scroll :global(.page) {
     background: #121316;
   }

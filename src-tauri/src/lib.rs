@@ -102,6 +102,20 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
+        .setup(|_app| {
+            // Señala al frontend que corre dentro de un AppImage (X11 forzado por
+            // linuxdeploy) para que el visor de PDF suba la resolución del canvas.
+            #[cfg(target_os = "linux")]
+            {
+                use tauri::Manager;
+                if std::env::var("APPIMAGE").is_ok() {
+                    if let Some(w) = _app.get_webview_window("main") {
+                        let _ = w.eval("window.__DOTTEX_APPIMAGE__=true");
+                    }
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             project::open_project,
             project::get_recent_projects,
