@@ -122,7 +122,6 @@ const es = {
   editorThemeDesc: "Colores del código",
   editorThemeAuto: "Según el tema general",
   themeLight: "Claro",
-  editorThemeOneDark: "One Dark",
 
   // Configuración: apariencia
   generalTheme: "Tema general",
@@ -247,7 +246,6 @@ const en: typeof es = {
   editorThemeDesc: "Code colors",
   editorThemeAuto: "Follow general theme",
   themeLight: "Light",
-  editorThemeOneDark: "One Dark",
 
   generalTheme: "General theme",
   generalThemeDesc: "Colors of the entire application",

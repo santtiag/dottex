@@ -32,7 +32,7 @@
   import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
   import { vim } from "@replit/codemirror-vim";
   import { stex } from "@codemirror/legacy-modes/mode/stex";
-  import { oneDark } from "@codemirror/theme-one-dark";
+  import { resolveTheme } from "./editorThemes";
   import { latexComplete } from "./latexComplete";
   import { mathPreview } from "./mathPreview";
   import { settings } from "./state.svelte";
@@ -92,7 +92,6 @@
 
   /** Extensiones que dependen de la configuración del usuario. */
   function optExts() {
-    const edDark = settings.editorTheme === "auto" ? dark : settings.editorTheme === "dark";
     return [
       settings.vim ? vim() : [], // debe preceder al resto de keymaps
       settings.autocomplete ? [autocompletion(), keymap.of(completionKeymap)] : [],
@@ -103,7 +102,7 @@
         spellcheck: String(settings.spellcheck),
         lang: settings.spellLang,
       }),
-      edDark ? oneDark : [],
+      resolveTheme(settings.editorTheme, dark).ext,
       EditorView.theme({
         "&": { fontSize: `${settings.fontSize}px` },
         ".cm-content": { lineHeight: String(settings.lineHeight) },

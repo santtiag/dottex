@@ -1,6 +1,9 @@
 <script lang="ts">
   import { app, settings } from "./state.svelte";
+  import { editorThemes } from "./editorThemes";
   import { t, LOCALES, type MsgKey } from "./i18n.svelte";
+
+  const THEMES = Object.entries(editorThemes);
 
   let { onClose }: { onClose: () => void } = $props();
 
@@ -81,8 +84,16 @@
             <span class="lbl">{t("editorTheme")}<small>{t("editorThemeDesc")}</small></span>
             <select bind:value={settings.editorTheme}>
               <option value="auto">{t("editorThemeAuto")}</option>
-              <option value="light">{t("themeLight")}</option>
-              <option value="dark">{t("editorThemeOneDark")}</option>
+              <optgroup label={t("themeLight")}>
+                {#each THEMES.filter(([, th]) => !th.dark) as [id, th] (id)}
+                  <option value={id}>{th.label}</option>
+                {/each}
+              </optgroup>
+              <optgroup label={t("themeDark")}>
+                {#each THEMES.filter(([, th]) => th.dark) as [id, th] (id)}
+                  <option value={id}>{th.label}</option>
+                {/each}
+              </optgroup>
             </select>
           </label>
           <label class="row">

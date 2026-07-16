@@ -47,7 +47,7 @@ export const settings = $state({
   spellcheck: false,
   spellLang: "es",
   locale: "es" as "es" | "en",
-  editorTheme: "auto" as "auto" | "light" | "dark",
+  editorTheme: "auto" as string, // "auto" o un id de editorThemes
   pdfInvert: true,
   fontSize: 14,
   fontFamily: "JetBrains Mono",
