@@ -2,14 +2,16 @@
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import type { CompileStatus } from "$lib/ipc";
-  import { cleanArtifacts } from "$lib/ipc";
+  import type { CompileStatus, RecentProject } from "$lib/ipc";
+  import { cleanArtifacts, getRecentProjects } from "$lib/ipc";
   import {
     app,
     autoCompile,
+    closeProject,
     exportPdf,
     fileBlobUrl,
     onCompileStatus,
+    openProject,
     pickAndOpenProject,
     refreshActiveFromDisk,
     reloadTree,
@@ -46,6 +48,20 @@
   let pdfW = $state(480);
   let logEl: HTMLDivElement | undefined = $state();
   let settingsOpen = $state(false);
+  // modo del editor para .tex: fuente cruda o WYSIWYG (por sesión)
+  let viewMode = $state<"code" | "visual">("code");
+  const isTex = $derived(app.active?.kind === "text" && app.active.path.endsWith(".tex"));
+  // buffer en vivo del editor: compilar siempre guarda lo que se ve en pantalla
+  let editorRef = $state<{ getText: () => string | undefined }>();
+  // menú del proyecto (abrir otra carpeta, recientes, cerrar)
+  let projMenuOpen = $state(false);
+  let recents = $state<RecentProject[]>([]);
+
+  async function toggleProjMenu() {
+    projMenuOpen = !projMenuOpen;
+    if (projMenuOpen)
+      recents = (await getRecentProjects()).filter((r) => r.path !== app.project?.path);
+  }
 
   onMount(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
@@ -92,10 +108,12 @@
   }
 
   function onKeydown(e: KeyboardEvent) {
-    if (!(e.ctrlKey || e.metaKey)) return;
+    if (e.key === "Escape") projMenuOpen = false;
+    // e.defaultPrevented: CodeMirror ya manejó Mod-Enter (guardó y compiló)
+    if (!(e.ctrlKey || e.metaKey) || e.defaultPrevented) return;
     if (e.key === "Enter") {
       e.preventDefault();
-      compileActive();
+      compileActive(editorRef?.getText());
     } else if (e.key === ",") {
       e.preventDefault();
       settingsOpen = !settingsOpen;
@@ -168,9 +186,47 @@
     {#if isMac}<span class="mac-pad"></span>{/if}
     {#if app.project}
       <button class="tb" title={t("toggleSidebar")} onclick={() => (sidebarOpen = !sidebarOpen)}>☰</button>
-      <button class="tb proj" title={t("switchProject")} onclick={pickAndOpenProject}>
-        {app.project.name}
-      </button>
+      <div class="projwrap">
+        <button class="tb proj" title={t("switchProject")} onclick={toggleProjMenu}>
+          {app.project.name} <span class="caret">▾</span>
+        </button>
+        {#if projMenuOpen}
+          <button class="menu-backdrop" aria-label={t("close")} onclick={() => (projMenuOpen = false)}></button>
+          <div class="menu">
+            <button
+              onclick={() => {
+                projMenuOpen = false;
+                pickAndOpenProject();
+              }}
+            >
+              {t("openFolder")}
+            </button>
+            {#if recents.length}
+              <div class="mhead">{t("recent")}</div>
+              {#each recents as r (r.path)}
+                <button
+                  class="mrecent"
+                  onclick={() => {
+                    projMenuOpen = false;
+                    openProject(r.path);
+                  }}
+                >
+                  <strong>{r.name}</strong><span>{r.path}</span>
+                </button>
+              {/each}
+            {/if}
+            <div class="msep"></div>
+            <button
+              onclick={() => {
+                projMenuOpen = false;
+                closeProject();
+              }}
+            >
+              {t("closeProject")}
+            </button>
+          </div>
+        {/if}
+      </div>
       <span class="file" data-tauri-drag-region>
         {app.active?.path ?? ""}{#if app.dirty}&nbsp;<span class="dot" title={t("unsaved")}>●</span>{/if}
       </span>
@@ -181,7 +237,7 @@
     {#if app.project}
       <button
         class="compile"
-        onclick={() => requestCompile()}
+        onclick={() => compileActive(editorRef?.getText())}
         disabled={app.compileState === "compiling"}
         title={t("compileTitle")}
       >
@@ -257,21 +313,33 @@
       {/if}
 
       <section class="center">
-        {#if crumbs.length}
+        {#if crumbs.length || isTex}
           <div class="editorbar">
             <span class="crumbs" title={crumbs.join(" › ")}>
               {#each crumbs as c, i}{#if i}<span class="sep">›</span>{/if}{c}{/each}
             </span>
+            {#if isTex}
+              <div class="viewmode">
+                <button class:active={viewMode === "code"} onclick={() => (viewMode = "code")}>
+                  {t("viewCode")}
+                </button>
+                <button class:active={viewMode === "visual"} onclick={() => (viewMode = "visual")}>
+                  {t("viewVisual")}
+                </button>
+              </div>
+            {/if}
           </div>
         {/if}
         {#if !app.active}
           <p class="empty">{t("selectFile")}</p>
         {:else if app.active.kind === "text"}
           <Editor
+            bind:this={editorRef}
             path={app.active.path}
             content={app.active.content}
             {dark}
             auto={app.auto}
+            visual={viewMode === "visual" && isTex}
             goto={app.goto}
             onSave={saveActive}
             onDirty={() => {
@@ -385,6 +453,70 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* menú del proyecto */
+  .projwrap {
+    position: relative;
+    flex: none;
+  }
+  .caret {
+    font-size: 9px;
+    opacity: 0.7;
+  }
+  .menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 99;
+    background: transparent;
+    border: none;
+  }
+  .menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    min-width: 280px;
+    max-width: 380px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgb(0 0 0 / 0.25);
+    padding: 4px;
+  }
+  .menu > button {
+    text-align: left;
+    padding: 7px 10px;
+    border-radius: 6px;
+  }
+  .menu > button:hover {
+    background: var(--hover);
+  }
+  .mhead {
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+    padding: 6px 10px 2px;
+  }
+  .mrecent {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+  }
+  .mrecent span {
+    font-size: 11.5px;
+    color: var(--fg-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 350px;
+  }
+  .msep {
+    height: 1px;
+    background: var(--border);
+    margin: 4px 0;
   }
   .file {
     font-size: 12px;
@@ -504,6 +636,27 @@
   .crumbs .sep {
     margin: 0 5px;
     opacity: 0.6;
+  }
+  /* conmutador Código/Visual */
+  .viewmode {
+    display: flex;
+    gap: 2px;
+    margin-left: auto;
+    padding: 1px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    flex: none;
+  }
+  .viewmode button {
+    font-size: 13px;
+    padding: 2px 14px;
+    border-radius: 5px;
+    color: var(--fg-dim);
+  }
+  .viewmode button.active {
+    background: var(--accent);
+    color: white;
   }
   .pdfpane {
     min-width: 0;

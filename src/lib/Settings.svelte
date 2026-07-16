@@ -9,14 +9,44 @@
 
   let section = $state<"editor" | "appearance" | "language">("editor");
 
-  const FONTS = [
+  // Solo se ofrecen fuentes realmente instaladas: si una no existe, el CSS
+  // cae al fallback y "cambiar de fuente" no cambia nada (bug clásico).
+  // ponytail: detección por medición en canvas; queryLocalFonts no existe en WebKitGTK.
+  const CANDIDATE_FONTS = [
     "JetBrains Mono",
     "Fira Code",
     "Source Code Pro",
     "Cascadia Code",
     "Ubuntu Mono",
     "DejaVu Sans Mono",
+    "Adwaita Mono",
+    "Iosevka",
+    "Iosevka Nerd Font",
+    "Hack",
+    "Liberation Mono",
+    "Noto Sans Mono",
+    "Roboto Mono",
+    "IBM Plex Mono",
+    "Inconsolata",
+    "Menlo",
+    "Monaco",
+    "SF Mono",
+    "Consolas",
+    "Courier New",
   ];
+  const probeCtx = document.createElement("canvas").getContext("2d")!;
+  function fontAvailable(f: string): boolean {
+    const probe = "mmmMMMiiilll010./\\";
+    return ["monospace", "serif"].some((g) => {
+      probeCtx.font = `16px ${g}`;
+      const base = probeCtx.measureText(probe).width;
+      probeCtx.font = `16px "${f}", ${g}`;
+      return probeCtx.measureText(probe).width !== base;
+    });
+  }
+  const FONTS = CANDIDATE_FONTS.filter(fontAvailable);
+  // la fuente guardada siempre se ofrece, aunque ya no se detecte
+  if (!FONTS.includes(settings.fontFamily)) FONTS.unshift(settings.fontFamily);
   const LANGS: [string, string][] = [
     ["es", "Español"],
     ["en", "English"],
@@ -121,10 +151,6 @@
               <option value="light">{t("themeLight")}</option>
               <option value="dark">{t("themeDark")}</option>
             </select>
-          </label>
-          <label class="row">
-            <span class="lbl">{t("pdfInvert")}<small>{t("pdfInvertDesc")}</small></span>
-            <input type="checkbox" bind:checked={settings.pdfInvert} />
           </label>
         {:else}
           <label class="row">

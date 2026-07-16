@@ -22,7 +22,7 @@
     indentOnInput,
     syntaxHighlighting,
   } from "@codemirror/language";
-  import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+  import { defaultKeymap, history, historyKeymap, redo, undo } from "@codemirror/commands";
   import {
     autocompletion,
     closeBrackets,
@@ -35,7 +35,9 @@
   import { resolveTheme } from "./editorThemes";
   import { latexComplete } from "./latexComplete";
   import { mathPreview } from "./mathPreview";
+  import { visualLatex } from "./visualLatex";
   import { settings } from "./state.svelte";
+  import { t, type MsgKey } from "./i18n.svelte";
   import "katex/dist/katex.min.css";
 
   const latex = StreamLanguage.define(stex);
@@ -45,6 +47,7 @@
     content,
     dark,
     auto,
+    visual,
     goto,
     onSave,
     onDirty,
@@ -57,6 +60,8 @@
     content: string;
     dark: boolean;
     auto: boolean;
+    /** modo Visual: sintaxis LaTeX oculta/renderizada en línea */
+    visual: boolean;
     goto: { line: number; seq: number } | null;
     onSave: (text: string) => void;
     onDirty: () => void;
@@ -76,8 +81,14 @@
   let idleTimer: ReturnType<typeof setTimeout>;
 
   const opts = new Compartment();
+  const isTex = $derived(path.endsWith(".tex"));
 
-  /** Envuelve la selección en sintaxis LaTeX (Mod-b / Mod-i). */
+  /** Texto actual del buffer (para compilar sin perder cambios sin guardar). */
+  export function getText(): string | undefined {
+    return view?.state.doc.toString();
+  }
+
+  /** Envuelve la selección en sintaxis LaTeX (Mod-b / Mod-i / toolbar). */
   function wrapSelection(v: EditorView, before: string, after: string) {
     v.dispatch(
       v.state.changeByRange((range) => ({
@@ -90,6 +101,71 @@
     );
   }
 
+  // ---- barra de herramientas: envolturas/plantillas LaTeX (Código y Visual) ----
+  interface Wrap {
+    key: MsgKey;
+    before: string;
+    after: string;
+  }
+  const HEADINGS: Wrap[] = [
+    { key: "tbSection", before: "\\section{", after: "}" },
+    { key: "tbSubsection", before: "\\subsection{", after: "}" },
+    { key: "tbSubsubsection", before: "\\subsubsection{", after: "}" },
+  ];
+  const MATHS: Wrap[] = [
+    { key: "tbMathInline", before: "$", after: "$" },
+    { key: "tbMathDisplay", before: "\\[\n  ", after: "\n\\]\n" },
+    { key: "tbMathEq", before: "\\begin{equation}\n  ", after: "\n\\end{equation}\n" },
+    { key: "tbMathFrac", before: "\\frac{", after: "}{}" },
+    { key: "tbMathSqrt", before: "\\sqrt{", after: "}" },
+    { key: "tbMathPow", before: "^{", after: "}" },
+    { key: "tbMathSub", before: "_{", after: "}" },
+    { key: "tbMathSum", before: "\\sum_{i=1}^{n} ", after: "" },
+    { key: "tbMathInt", before: "\\int_{a}^{b} ", after: "" },
+    { key: "tbMathLim", before: "\\lim_{x \\to \\infty} ", after: "" },
+    {
+      key: "tbMathMatrix",
+      before: "\\begin{pmatrix}\n  a & b \\\\\n  c & d\n\\end{pmatrix}",
+      after: "",
+    },
+  ];
+  const ITEMIZE: Wrap = { key: "tbBullets", before: "\\begin{itemize}\n  \\item ", after: "\n\\end{itemize}\n" };
+  const ENUMERATE: Wrap = { key: "tbNumbered", before: "\\begin{enumerate}\n  \\item ", after: "\n\\end{enumerate}\n" };
+  const TABLE: Wrap = {
+    key: "tbTable",
+    before: "\\begin{tabular}{|c|c|c|}\n  \\hline\n  ",
+    after: " &  &  \\\\\n  \\hline\n   &  &  \\\\\n  \\hline\n\\end{tabular}\n",
+  };
+  const IMAGE: Wrap = { key: "tbImage", before: "\\includegraphics[width=0.8\\textwidth]{", after: "}" };
+
+  function toolWrap(before: string, after: string) {
+    if (!view) return;
+    wrapSelection(view, before, after);
+    view.focus();
+  }
+  function toolPick(e: Event, items: Wrap[]) {
+    const sel = e.currentTarget as HTMLSelectElement;
+    const it = items[+sel.value];
+    sel.value = "";
+    if (it) toolWrap(it.before, it.after);
+  }
+  /** \href{url}{texto}: la selección pasa a ser el texto; el cursor, a la URL. */
+  function toolLink() {
+    if (!view) return;
+    const { from, to } = view.state.selection.main;
+    const text = view.state.sliceDoc(from, to);
+    view.dispatch({
+      changes: { from, to, insert: `\\href{}{${text}}` },
+      selection: { anchor: from + "\\href{".length },
+    });
+    view.focus();
+  }
+  function toolCmd(fn: (v: EditorView) => unknown) {
+    if (!view) return;
+    fn(view);
+    view.focus();
+  }
+
   /** Extensiones que dependen de la configuración del usuario. */
   function optExts() {
     return [
@@ -98,6 +174,12 @@
       settings.closeBrackets ? [closeBrackets(), keymap.of(closeBracketsKeymap)] : [],
       drawSelection({ cursorBlinkRate: settings.steadyCursor ? 0 : 1200 }),
       settings.mathPreview ? mathPreview : [],
+      visual
+        ? visualLatex({
+            preamble: (n) => t("preambleLines", n),
+            references: () => t("references"),
+          })
+        : [],
       EditorView.contentAttributes.of({
         spellcheck: String(settings.spellcheck),
         lang: settings.spellLang,
@@ -237,11 +319,91 @@
   });
 </script>
 
-<div class="editor" bind:this={host}></div>
+<div class="wrap">
+  {#if isTex}
+    <div class="latexbar">
+      <button title={t("tbUndo")} onclick={() => toolCmd(undo)}>↶</button>
+      <button title={t("tbRedo")} onclick={() => toolCmd(redo)}>↷</button>
+      <span class="tsep"></span>
+      <button class="bf" title={t("tbBold")} onclick={() => toolWrap("\\textbf{", "}")}>B</button>
+      <button class="it" title={t("tbItalic")} onclick={() => toolWrap("\\textit{", "}")}>I</button>
+      <button class="ul" title={t("tbUnderline")} onclick={() => toolWrap("\\underline{", "}")}>U</button>
+      <span class="tsep"></span>
+      <select title={t("tbHeadings")} onchange={(e) => toolPick(e, HEADINGS)}>
+        <option value="" disabled selected>{t("tbHeadings")}</option>
+        {#each HEADINGS as h, i (h.key)}<option value={i}>{t(h.key)}</option>{/each}
+      </select>
+      <button title={t(ITEMIZE.key)} onclick={() => toolWrap(ITEMIZE.before, ITEMIZE.after)}>•≡</button>
+      <button title={t(ENUMERATE.key)} onclick={() => toolWrap(ENUMERATE.before, ENUMERATE.after)}>1.</button>
+      <span class="tsep"></span>
+      <select title={t("tbMath")} onchange={(e) => toolPick(e, MATHS)}>
+        <option value="" disabled selected>ƒ(x)</option>
+        {#each MATHS as m, i (m.key)}<option value={i}>{t(m.key)}</option>{/each}
+      </select>
+      <button title={t("tbLink")} onclick={toolLink}>🔗</button>
+      <button title={t(TABLE.key)} onclick={() => toolWrap(TABLE.before, TABLE.after)}>⊞</button>
+      <button title={t(IMAGE.key)} onclick={() => toolWrap(IMAGE.before, IMAGE.after)}>🖼</button>
+    </div>
+  {/if}
+  <div class="editor" bind:this={host}></div>
+</div>
 
 <style>
-  .editor {
+  .wrap {
     height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+  .latexbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 2px;
+    flex: none;
+    padding: 3px 8px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+  .latexbar button {
+    min-width: 26px;
+    height: 24px;
+    font-size: 13px;
+    color: var(--fg-dim);
+  }
+  .latexbar button:hover {
+    color: var(--fg);
+    background: var(--hover);
+  }
+  .latexbar .bf {
+    font-weight: 700;
+  }
+  .latexbar .it {
+    font-style: italic;
+  }
+  .latexbar .ul {
+    text-decoration: underline;
+  }
+  .latexbar select {
+    font: inherit;
+    font-size: 12px;
+    height: 24px;
+    color: var(--fg-dim);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0 4px;
+    max-width: 110px;
+  }
+  .tsep {
+    width: 1px;
+    height: 16px;
+    background: var(--border);
+    margin: 0 4px;
+    flex: none;
+  }
+  .editor {
+    flex: 1;
+    min-height: 0;
     overflow: hidden;
   }
   .editor :global(.cm-editor) {

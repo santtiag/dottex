@@ -48,7 +48,6 @@ export const settings = $state({
   spellLang: "es",
   locale: "es" as "es" | "en",
   editorTheme: "auto" as string, // "auto" o un id de editorThemes
-  pdfInvert: true,
   fontSize: 14,
   fontFamily: "JetBrains Mono",
   lineHeight: 1.5,
@@ -102,6 +101,20 @@ export async function openProject(path: string) {
   } catch (e) {
     toast(String(e));
   }
+}
+
+/** Cierra el proyecto y vuelve a la bienvenida (que lista los recientes).
+ *  ponytail: no hay IPC close_project; el watcher del backend queda vivo
+ *  (inofensivo: los handlers ya toleran proyecto cerrado). */
+export function closeProject() {
+  app.project = null;
+  app.tree = [];
+  app.active = null;
+  app.dirty = false;
+  app.pdf = null;
+  app.compileState = "idle";
+  app.issues = [];
+  app.log = [];
 }
 
 export async function openFile(path: string) {

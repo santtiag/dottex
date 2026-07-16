@@ -4,7 +4,6 @@
   import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
   import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
   import { readFileBytes } from "./ipc";
-  import { settings } from "./state.svelte";
   import { t } from "./i18n.svelte";
 
   pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
@@ -26,7 +25,7 @@
   let doc: PDFDocumentProxy | null = null;
   let task: PDFDocumentLoadingTask | null = null;
   let observer: IntersectionObserver | null = null;
-  let zoom = $state(1); // multiplicador sobre "ajustar al ancho"
+  let zoom = $state(1.6); // multiplicador sobre "ajustar al ancho"; 160% por defecto
   let numPages = $state(0);
   let loadSeq = 0;
   let renderScale = 1; // px CSS por bp del último render
@@ -64,12 +63,6 @@
 
   $effect(() => {
     if (source) load(source.path, source.version);
-  });
-
-  // repinta al alternar la inversión (ahora se hornea en los píxeles del canvas)
-  $effect(() => {
-    settings.pdfInvert;
-    if (doc) render();
   });
 
   onDestroy(() => {
@@ -154,21 +147,7 @@
       holder.style.height = canvas.style.height;
       const ctx = canvas.getContext("2d")!;
       await page.render({ canvas, canvasContext: ctx, viewport: vp, transform: [dpr, 0, 0, dpr, 0, 0] }).promise;
-      // "modo oscuro" horneado en los píxeles: el filtro CSS sobre el <canvas>
-      // se rasteriza a 1x en WebKitGTK y difumina el PDF.
-      if (settings.pdfInvert) {
-        const inv = document.createElement("canvas");
-        inv.width = canvas.width;
-        inv.height = canvas.height;
-        inv.style.width = canvas.style.width;
-        inv.style.height = canvas.style.height;
-        const ictx = inv.getContext("2d")!;
-        ictx.filter = "invert(0.93) hue-rotate(180deg)";
-        ictx.drawImage(canvas, 0, 0);
-        holder.replaceChildren(inv);
-      } else {
-        holder.replaceChildren(canvas);
-      }
+      holder.replaceChildren(canvas);
     } catch (e) {
       console.error("PDF page:", e);
     }
@@ -180,7 +159,7 @@
   }
 </script>
 
-<div class="viewer" class:invert={settings.pdfInvert}>
+<div class="viewer">
   <div class="toolbar">
     <button onclick={() => setZoom(zoom - 0.15)} title={t("zoomOut")}>−</button>
     <span class="zoom">{Math.round(zoom * 100)}%</span>
@@ -247,11 +226,6 @@
     box-shadow: 0 2px 8px rgb(0 0 0 / 0.25);
     flex: none;
     position: relative; /* ancla del marcador SyncTeX */
-  }
-  /* la inversión se hornea en el canvas (paintPage); aquí solo el fondo oscuro
-     del marco de página para que no destaque en blanco */
-  .viewer.invert .pdf-scroll :global(.page) {
-    background: #121316;
   }
   .pdf-scroll :global(.sync-mark) {
     position: absolute;
