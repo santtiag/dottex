@@ -39,23 +39,31 @@ pub fn data_dir() -> PathBuf {
         .join("dottex")
 }
 
+// async + spawn_blocking: detectar el root file lee todos los .tex y el árbol
+// se recorre recursivo; nada de eso debe congelar el UI al abrir.
 #[tauri::command]
-pub fn open_project(
+pub async fn open_project(
     app: AppHandle,
-    state: State<AppState>,
+    state: State<'_, AppState>,
     path: String,
 ) -> Result<ProjectInfo, String> {
-    let root = fs::canonicalize(&path).map_err(|e| format!("No se pudo abrir la carpeta: {e}"))?;
-    if !root.is_dir() {
-        return Err("La ruta no es una carpeta".into());
-    }
-    for sub in ["build", "cache", "trash"] {
-        fs::create_dir_all(root.join(".dottex").join(sub))
-            .map_err(|e| format!("No se pudo crear .dottex/ (¿permisos?): {e}"))?;
-    }
-
-    let root_file = resolve_root_file(&root);
-    save_config(&root, &root_file);
+    let (root, root_file, tree) = tokio::task::spawn_blocking(move || -> Result<_, String> {
+        let root =
+            fs::canonicalize(&path).map_err(|e| format!("No se pudo abrir la carpeta: {e}"))?;
+        if !root.is_dir() {
+            return Err("La ruta no es una carpeta".into());
+        }
+        for sub in ["build", "cache", "trash"] {
+            fs::create_dir_all(root.join(".dottex").join(sub))
+                .map_err(|e| format!("No se pudo crear .dottex/ (¿permisos?): {e}"))?;
+        }
+        let root_file = resolve_root_file(&root);
+        save_config(&root, &root_file);
+        let tree = scan_tree(&root, &root);
+        Ok((root, root_file, tree))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
 
     let watcher = fs_ops::start_watcher(app, root.clone())
         .map_err(|e| format!("No se pudo iniciar el watcher: {e}"))?;
@@ -66,11 +74,13 @@ pub fn open_project(
         .unwrap_or_else(|| root.display().to_string());
 
     // Reemplazar el proyecto anterior dropea su watcher.
-    *state.project.lock().unwrap() = Some(Project {
+    *crate::lock_or_recover(&state.project) = Some(Project {
         root: root.clone(),
         root_file: root_file.clone(),
         watcher,
     });
+    // el SyncTeX cacheado pertenece al proyecto anterior
+    *crate::lock_or_recover(&state.synctex) = None;
 
     add_recent(&name, &root);
 
@@ -78,14 +88,16 @@ pub fn open_project(
         name,
         path: root.display().to_string(),
         root_file,
-        tree: scan_tree(&root, &root),
+        tree,
     })
 }
 
 #[tauri::command]
-pub fn list_tree(state: State<AppState>) -> Result<Vec<TreeNode>, String> {
+pub async fn list_tree(state: State<'_, AppState>) -> Result<Vec<TreeNode>, String> {
     let root = state.root()?;
-    Ok(scan_tree(&root, &root))
+    tokio::task::spawn_blocking(move || scan_tree(&root, &root))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Fija manualmente el .tex raíz del proyecto (persistido en .dottex/config.json).
@@ -96,7 +108,7 @@ pub fn set_root_file(state: State<AppState>, path: String) -> Result<(), String>
         return Err("El archivo no existe".into());
     }
     let root = state.root()?;
-    if let Some(p) = state.project.lock().unwrap().as_mut() {
+    if let Some(p) = crate::lock_or_recover(&state.project).as_mut() {
         p.root_file = Some(path.clone());
     }
     save_config(&root, &Some(path));
@@ -193,12 +205,17 @@ fn save_config(root: &Path, root_file: &Option<String>) {
 }
 
 fn detect_root_file(root: &Path) -> Option<String> {
+    use std::sync::OnceLock;
+    static MAGIC_RE: OnceLock<regex::Regex> = OnceLock::new();
+    static INPUTS_RE: OnceLock<regex::Regex> = OnceLock::new();
+    let magic = MAGIC_RE
+        .get_or_init(|| regex::Regex::new(r"(?im)^%\s*!\s*TEX\s+root\s*=\s*(.+?)\s*$").unwrap());
+    let inputs = INPUTS_RE
+        .get_or_init(|| regex::Regex::new(r"\\(?:input|include|subfile)\{([^}]+)\}").unwrap());
+
     let mut tex_files = Vec::new();
     collect_by_ext(root, root, &["tex"], &mut tex_files);
     tex_files.sort();
-
-    let magic = regex::Regex::new(r"(?im)^%\s*!\s*TEX\s+root\s*=\s*(.+?)\s*$").unwrap();
-    let inputs = regex::Regex::new(r"\\(?:input|include|subfile)\{([^}]+)\}").unwrap();
 
     let mut with_docclass = Vec::new();
     let mut referenced: HashSet<String> = HashSet::new();

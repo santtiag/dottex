@@ -15,10 +15,17 @@ pub struct Issue {
 // ponytail: el log envuelve a 79 columnas y puede partir nombres de archivo;
 // si la atribución falla mucho, portar el parser de texlab.
 pub fn parse_log(log: &str) -> Vec<Issue> {
+    use std::sync::OnceLock;
+    static LINE_RE: OnceLock<regex::Regex> = OnceLock::new();
+    static WARN_RE: OnceLock<regex::Regex> = OnceLock::new();
+    static INPUT_LINE_RE: OnceLock<regex::Regex> = OnceLock::new();
+    let line_re = LINE_RE.get_or_init(|| regex::Regex::new(r"^l\.(\d+)").unwrap());
+    let warn_re = WARN_RE
+        .get_or_init(|| regex::Regex::new(r"(?:LaTeX|Package\s+\w+)\s+Warning:\s*(.+)").unwrap());
+    let input_line_re =
+        INPUT_LINE_RE.get_or_init(|| regex::Regex::new(r"on input line (\d+)\.?\s*$").unwrap());
+
     let lines: Vec<&str> = log.lines().collect();
-    let line_re = regex::Regex::new(r"^l\.(\d+)").unwrap();
-    let warn_re = regex::Regex::new(r"(?:LaTeX|Package\s+\w+)\s+Warning:\s*(.+)").unwrap();
-    let input_line_re = regex::Regex::new(r"on input line (\d+)\.?\s*$").unwrap();
 
     let mut stack: Vec<String> = Vec::new();
     let mut issues = Vec::new();
@@ -77,9 +84,8 @@ fn track_files(line: &str, stack: &mut Vec<String>) {
                 .find(|c: char| c == '(' || c == ')' || c.is_whitespace())
                 .unwrap_or(after.len());
             let token = after[..end].trim_start_matches("./");
-            let has_known_ext = ["tex", "sty", "cls", "bib", "bbx", "cbx", "def", "cfg"]
-                .iter()
-                .any(|ext| token.ends_with(&format!(".{ext}")));
+            const KNOWN_EXTS: &[&str] = &[".tex", ".sty", ".cls", ".bib", ".bbx", ".cbx", ".def", ".cfg"];
+            let has_known_ext = KNOWN_EXTS.iter().any(|ext| token.ends_with(ext));
             // TeX omite la extensión si \input no la lleva ("(sections/intro");
             // .tex es el default del propio TeX.
             let entry = if has_known_ext {

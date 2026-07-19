@@ -24,6 +24,7 @@
     toast,
   } from "$lib/state.svelte";
   import { invalidateCompletions, loadSnippets } from "$lib/latexComplete";
+  import { clearImgCache } from "$lib/visualLatex";
   import { t } from "$lib/i18n.svelte";
   import Editor from "$lib/Editor.svelte";
   import FileTree from "$lib/FileTree.svelte";
@@ -91,6 +92,7 @@
         if (e.payload) reloadTree();
         refreshActiveFromDisk();
         invalidateCompletions();
+        clearImgCache(); // imágenes editadas en disco se recargan al re-renderizar
       }),
     ]);
     return () => unlisten.then((fns) => fns.forEach((f) => f()));
@@ -162,17 +164,35 @@
 
   // migas de pan: ruta del archivo + cadena de secciones hasta el cursor
   // ponytail: usa el contenido guardado (no el buffer en vivo); se actualiza al guardar
+  // Índice de secciones recalculado solo cuando cambia el contenido; el
+  // derivado del cursor solo camina este array (mover el cursor era antes
+  // un split("\n") del documento entero).
+  const sectionIndex = $derived.by(() => {
+    if (!settings.breadcrumbs || app.active?.kind !== "text") return [];
+    const out: { line: number; level: number; title: string }[] = [];
+    const lines = app.active.content.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(/\\(subsubsection|subsection|section)\*?\{([^}]*)/);
+      if (m) {
+        out.push({
+          line: i + 1,
+          level: m[1] === "section" ? 1 : m[1] === "subsection" ? 2 : 3,
+          title: m[2],
+        });
+      }
+    }
+    return out;
+  });
   const crumbs = $derived.by(() => {
     if (!settings.breadcrumbs || app.active?.kind !== "text") return [];
-    const lines = app.active.content.split("\n").slice(0, app.cursorLine);
     let sec = "";
     let sub = "";
     let subsub = "";
-    for (const l of lines) {
-      let m;
-      if ((m = l.match(/\\section\*?\{([^}]*)/))) [sec, sub, subsub] = [m[1], "", ""];
-      else if ((m = l.match(/\\subsection\*?\{([^}]*)/))) [sub, subsub] = [m[1], ""];
-      else if ((m = l.match(/\\subsubsection\*?\{([^}]*)/))) subsub = m[1];
+    for (const s of sectionIndex) {
+      if (s.line > app.cursorLine) break;
+      if (s.level === 1) [sec, sub, subsub] = [s.title, "", ""];
+      else if (s.level === 2) [sub, subsub] = [s.title, ""];
+      else subsub = s.title;
     }
     return [...app.active.path.split("/"), sec, sub, subsub].filter(Boolean);
   });
@@ -372,9 +392,8 @@
     </main>
 
     {#if app.showLog}
-      <div class="log" bind:this={logEl}>
-        {#each app.log as line}<div>{line}</div>{/each}
-      </div>
+      <!-- texto plano con pre-wrap: evita re-diferenciar hasta 2000 divs por frame -->
+      <div class="log" bind:this={logEl}>{app.log.join("\n")}</div>
     {/if}
 
     <footer class="status">

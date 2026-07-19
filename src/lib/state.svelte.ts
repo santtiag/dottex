@@ -73,11 +73,19 @@ export function toast(msg: string) {
 
 /** Binarios del proyecto como blob URL (revoca el anterior). */
 let lastBlobUrl = "";
+let blobSeq = 0;
 export async function fileBlobUrl(path: string): Promise<string> {
+  const seq = ++blobSeq;
   const bytes = await ipc.readFileBytes(path);
+  const url = URL.createObjectURL(new Blob([bytes]));
+  if (seq !== blobSeq) {
+    // respuesta obsoleta: Svelte ya descartó este {#await}; no tocar lastBlobUrl
+    URL.revokeObjectURL(url);
+    return url;
+  }
   if (lastBlobUrl) URL.revokeObjectURL(lastBlobUrl);
-  lastBlobUrl = URL.createObjectURL(new Blob([bytes]));
-  return lastBlobUrl;
+  lastBlobUrl = url;
+  return url;
 }
 
 /** Diálogo de sistema para abrir una carpeta como proyecto. */
@@ -117,9 +125,12 @@ export function closeProject() {
   app.log = [];
 }
 
+let openSeq = 0;
 export async function openFile(path: string) {
+  const seq = ++openSeq;
   try {
     const f = await ipc.readFile(path);
+    if (seq !== openSeq) return; // llegó tarde: ya se pidió otro archivo
     app.active = { path, kind: f.kind, absPath: f.abs_path, content: f.content ?? "" };
     app.dirty = false;
   } catch (e) {
@@ -164,7 +175,14 @@ export function requestCompile() {
     pending = true;
     return;
   }
-  ipc.compile().catch((e) => toast(String(e)));
+  // síncrono: el evento compile:status llega tarde y dos disparos seguidos
+  // (Ctrl+Enter + autocompilado) lanzarían dos compilaciones reales
+  app.compileState = "compiling";
+  ipc.compile().catch((e) => {
+    // si el backend ya emitió "error" no lo pisamos con "idle"
+    if (app.compileState === "compiling") app.compileState = "idle";
+    toast(String(e));
+  });
 }
 
 export function onCompileStatus(s: CompileStatus) {

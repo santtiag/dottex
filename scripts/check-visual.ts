@@ -3,7 +3,7 @@
 //   node_modules/.pnpm/esbuild@*/node_modules/esbuild/bin/esbuild \
 //     scripts/check-visual.ts --bundle --format=esm --outfile=/tmp/cv.mjs && node /tmp/cv.mjs
 import { EditorState } from "@codemirror/state";
-import { parseTabular, scanVisual, visualField, visualLatex } from "../src/lib/visualLatex";
+import { parseTabular, rescanEffect, scanVisual, visualField, visualLatex } from "../src/lib/visualLatex";
 
 const assert = (cond: unknown, msg: string) => {
   if (!cond) throw new Error(`FALLO: ${msg}`);
@@ -123,8 +123,13 @@ const inside = mk(mathEl.from + 1).field(visualField).deco.size;
 assert(outside > 0, "hay decoraciones");
 assert(inside === outside - 1, `reveal: ${outside} → ${inside}`);
 
-// editar re-escanea sin excepción
+// editar solo mapea las decoraciones (barato); el re-escaneo llega después
+// como rescanEffect (en la app lo despacha rescanPlugin con debounce)
 const tr = mk(0).update({ changes: { from: doc.indexOf("Texto"), insert: "$y$ " } });
-assert(tr.state.field(visualField).deco.size === outside + 1, "nueva ecuación decorada");
+assert(tr.state.field(visualField).deco.size === outside, "edición mapea sin re-escanear");
+const tr2 = tr.state.update({
+  effects: rescanEffect.of(scanVisual(tr.state.doc.toString())),
+});
+assert(tr2.state.field(visualField).deco.size === outside + 1, "nueva ecuación decorada tras el rescan");
 
 console.log(`OK: ${els.length} elementos, ${outside} decoraciones, reveal y edición correctos`);

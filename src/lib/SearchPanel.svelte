@@ -19,14 +19,18 @@
     timer = setTimeout(run, 300);
   }
 
+  let seq = 0;
   async function run() {
+    const s = ++seq;
     if (!query) {
       hits = [];
       searched = false;
       return;
     }
     try {
-      hits = await searchProject(query, isRegex, caseSensitive);
+      const res = await searchProject(query, isRegex, caseSensitive);
+      if (s !== seq) return; // una búsqueda más nueva ya está en vuelo
+      hits = res;
       searched = true;
     } catch (e) {
       toast(String(e));

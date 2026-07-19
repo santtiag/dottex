@@ -8,6 +8,17 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 
 const TECTONIC_VERSION: &str = "0.15.0";
 
+/// SHA-256 de los assets del release 0.15.0 (pinneados el 2026-07-18): el
+/// binario descargado se ejecuta, así que una descarga manipulada sería
+/// ejecución de código arbitrario.
+const TECTONIC_SHA256: &[(&str, &str)] = &[
+    ("x86_64-unknown-linux-musl.tar.gz", "dfb82876f2986862996e564fa507a9e576e0c1e3bee63c2c1bd677c2543e6407"),
+    ("aarch64-unknown-linux-musl.tar.gz", "1f59f9fb8eb65e8ba18658fc9016767e7d3e12488ded8b8fffa34254e51ce42c"),
+    ("x86_64-apple-darwin.tar.gz", "dd42576eaa4c0df58c243dd78b7b864d9deb405ffdfcdadd1b79a31faceab747"),
+    ("aarch64-apple-darwin.tar.gz", "24bd46566fa30d41101848405e9cbc4645edb92d8f857c9d21262174fb70cd33"),
+    ("x86_64-pc-windows-msvc.zip", "1d6bb76f049c8a3774f6e9d66e4b04e1a8c3dcb37527b6b41b7e894328e7bf29"),
+];
+
 #[derive(Serialize, Clone)]
 pub struct CompileStatus {
     /// "compiling" | "ok" | "error"
@@ -34,8 +45,17 @@ pub async fn compile(app: AppHandle, state: State<'_, AppState>) -> Result<(), S
     if state.compiling.swap(true, Ordering::SeqCst) {
         return Err("Ya hay una compilación en curso".into());
     }
+    // RAII: el flag se limpia aunque el future se cancele (ventana cerrada a
+    // media compilación) o run_compile haga panic; si no, quedaría atascado
+    // en `true` y toda compilación posterior sería rechazada.
+    struct ClearOnDrop<'a>(&'a std::sync::atomic::AtomicBool);
+    impl Drop for ClearOnDrop<'_> {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::SeqCst);
+        }
+    }
+    let _guard = ClearOnDrop(&state.compiling);
     let result = run_compile(&app, &state).await;
-    state.compiling.store(false, Ordering::SeqCst);
     if let Err(e) = &result {
         emit_status(
             &app,
@@ -73,7 +93,7 @@ async fn run_compile(app: &AppHandle, state: &AppState) -> Result<(), String> {
     let root_file = state.root_file()?;
 
     // el binario se resuelve/instala una sola vez por sesión
-    let cached = state.tectonic.lock().unwrap().clone();
+    let cached = crate::lock_or_recover(&state.tectonic).clone();
     let engine = match cached {
         Some(p) if p.is_file() => p,
         _ => {
@@ -81,7 +101,7 @@ async fn run_compile(app: &AppHandle, state: &AppState) -> Result<(), String> {
             let p = tokio::task::spawn_blocking(move || find_or_install_tectonic(&app2))
                 .await
                 .map_err(|e| e.to_string())??;
-            *state.tectonic.lock().unwrap() = Some(p.clone());
+            *crate::lock_or_recover(&state.tectonic) = Some(p.clone());
             p
         }
     };
@@ -105,6 +125,8 @@ async fn run_compile(app: &AppHandle, state: &AppState) -> Result<(), String> {
         .current_dir(&root)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        // si el future se dropea (cierre de la app), no dejar tectonic huérfano
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("No se pudo ejecutar Tectonic ({}): {e}", engine.display()))?;
 
@@ -163,6 +185,32 @@ async fn run_compile(app: &AppHandle, state: &AppState) -> Result<(), String> {
     Ok(())
 }
 
+// ponytail: herramienta de checksum del sistema (como curl/tar más abajo);
+// migrar al crate sha2 si falla en alguna plataforma.
+fn sha256_file(path: &Path) -> Result<String, String> {
+    let out = if cfg!(windows) {
+        std::process::Command::new("certutil")
+            .arg("-hashfile")
+            .arg(path)
+            .arg("SHA256")
+            .output()
+    } else if cfg!(target_os = "macos") {
+        std::process::Command::new("shasum").args(["-a", "256"]).arg(path).output()
+    } else {
+        std::process::Command::new("sha256sum").arg(path).output()
+    }
+    .map_err(|e| format!("No se pudo calcular el checksum: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("Checksum falló: {}", String::from_utf8_lossy(&out.stderr)));
+    }
+    // sha256sum/shasum: "<hex>  archivo"; certutil: el hex va en su propia línea
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .find(|t| t.len() == 64 && t.chars().all(|c| c.is_ascii_hexdigit()))
+        .map(|t| t.to_ascii_lowercase())
+        .ok_or_else(|| "Salida de checksum irreconocible".into())
+}
+
 fn tectonic_binary_name() -> &'static str {
     if cfg!(windows) {
         "tectonic.exe"
@@ -188,6 +236,22 @@ fn find_or_install_tectonic(app: &AppHandle) -> Result<PathBuf, String> {
         return Ok(installed);
     }
     download_tectonic(app, &installed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sha256_de_archivo_vacio() {
+        let p = std::env::temp_dir().join(format!("dottex-sha-test-{}", std::process::id()));
+        std::fs::write(&p, b"").unwrap();
+        assert_eq!(
+            sha256_file(&p).unwrap(),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        let _ = std::fs::remove_file(&p);
+    }
 }
 
 fn download_tectonic(app: &AppHandle, dest: &Path) -> Result<PathBuf, String> {
@@ -227,6 +291,19 @@ fn download_tectonic(app: &AppHandle, dest: &Path) -> Result<PathBuf, String> {
     run("curl", &["-fsSL", &url, "-o", &archive.to_string_lossy()]).map_err(|e| {
         format!("No se pudo descargar Tectonic (¿sin conexión?). Instálalo manualmente y reintenta. {e}")
     })?;
+    let expected = TECTONIC_SHA256
+        .iter()
+        .find(|(a, _)| *a == asset)
+        .map(|(_, h)| *h)
+        .ok_or_else(|| format!("Sin checksum registrado para {asset}"))?;
+    let actual = sha256_file(&archive)?;
+    if actual != expected {
+        let _ = std::fs::remove_file(&archive);
+        return Err(format!(
+            "El checksum de Tectonic no coincide (esperado {expected}, obtenido {actual}); \
+             descarga corrupta o manipulada. Instálalo manualmente y reintenta."
+        ));
+    }
     run("tar", &["-xf", &archive.to_string_lossy(), "-C", &bin_dir.to_string_lossy()])?;
     let _ = std::fs::remove_file(&archive);
 

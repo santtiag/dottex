@@ -27,7 +27,7 @@ struct Record {
     page: u32,
 }
 
-struct SyncData {
+pub(crate) struct SyncData {
     records: Vec<Record>,
     /// tag -> ruta relativa al proyecto
     inputs: Vec<(u32, String)>,
@@ -81,27 +81,48 @@ pub fn synctex_inverse(
     }))
 }
 
-fn load(state: &AppState) -> Result<SyncData, String> {
+/// Descomprimir + parsear el .synctex es caro y esto corre en cada
+/// interacción de sync: se cachea por (ruta, mtime), así cada compilación
+/// (mtime nuevo) invalida sola.
+fn load(state: &AppState) -> Result<std::sync::Arc<SyncData>, String> {
     let root = state.root()?;
     let stem = state.pdf_stem()?;
     let build = state.build_dir()?;
     let gz = build.join(format!("{stem}.synctex.gz"));
     let plain = build.join(format!("{stem}.synctex"));
 
-    let text = if gz.is_file() {
+    let path = if gz.is_file() {
+        gz
+    } else if plain.is_file() {
+        plain
+    } else {
+        return Err("No hay datos de SyncTeX; compila primero".into());
+    };
+    let mtime = std::fs::metadata(&path)
+        .and_then(|m| m.modified())
+        .map_err(|e| e.to_string())?;
+
+    let mut cache = crate::lock_or_recover(&state.synctex);
+    if let Some((p, t, data)) = cache.as_ref() {
+        if *p == path && *t == mtime {
+            return Ok(data.clone());
+        }
+    }
+
+    let text = if path.extension().is_some_and(|e| e == "gz") {
         let mut s = String::new();
         flate2::read::GzDecoder::new(
-            std::fs::File::open(&gz).map_err(|e| e.to_string())?,
+            std::fs::File::open(&path).map_err(|e| e.to_string())?,
         )
         .read_to_string(&mut s)
         .map_err(|e| format!("SyncTeX corrupto: {e}"))?;
         s
-    } else if plain.is_file() {
-        std::fs::read_to_string(&plain).map_err(|e| e.to_string())?
     } else {
-        return Err("No hay datos de SyncTeX; compila primero".into());
+        std::fs::read_to_string(&path).map_err(|e| e.to_string())?
     };
-    Ok(parse(&text, &root))
+    let data = std::sync::Arc::new(parse(&text, &root));
+    *cache = Some((path, mtime, data.clone()));
+    Ok(data)
 }
 
 fn parse(text: &str, root: &Path) -> SyncData {

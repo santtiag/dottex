@@ -8,8 +8,22 @@
  * Parsing por regex + emparejado de llaves, como el resto del codebase
  * (breadcrumbs, outline, latexMath).
  */
-import { type EditorState, type Extension, type Range, StateField } from "@codemirror/state";
-import { Decoration, type DecorationSet, EditorView, WidgetType } from "@codemirror/view";
+import {
+  type ChangeDesc,
+  type EditorState,
+  type Extension,
+  type Range,
+  StateEffect,
+  StateField,
+} from "@codemirror/state";
+import {
+  Decoration,
+  type DecorationSet,
+  EditorView,
+  ViewPlugin,
+  type ViewUpdate,
+  WidgetType,
+} from "@codemirror/view";
 import katex from "katex";
 import { readFileBytes } from "./ipc";
 import { MATH_RE, mathFromMatch } from "./latexMath";
@@ -312,7 +326,8 @@ function katexHtml(src: string, display: boolean): string {
   let html = katexCache.get(key);
   if (html === undefined) {
     html = katex.renderToString(src, { displayMode: display, throwOnError: false });
-    if (katexCache.size > 500) katexCache.clear(); // ponytail: caché simple, LRU si hiciera falta
+    // ponytail: evicción FIFO (Map conserva orden de inserción); LRU si hiciera falta
+    if (katexCache.size > 500) katexCache.delete(katexCache.keys().next().value!);
     katexCache.set(key, html);
   }
   return html;
@@ -349,6 +364,14 @@ function revealOnClick(view: EditorView, el: HTMLElement) {
 // ponytail: rutas relativas a la raíz del proyecto; no se resuelve
 // \graphicspath ni PDF/EPS — placeholder con el nombre si no carga.
 const imgCache = new Map<string, Promise<string>>();
+
+/** Revoca y vacía el caché de imágenes (al cambiar archivos en disco). */
+export function clearImgCache() {
+  for (const p of imgCache.values()) {
+    p.then((url) => URL.revokeObjectURL(url)).catch(() => {});
+  }
+  imgCache.clear();
+}
 function imageUrl(path: string): Promise<string> {
   let p = imgCache.get(path);
   if (!p) {
@@ -551,14 +574,30 @@ function widgetOf(spec: WidgetSpec): WidgetType {
 interface VState {
   els: VisualElement[];
   deco: DecorationSet;
+  /** posiciones `from` de los elementos revelados por la selección */
+  revealKey: string;
+}
+
+/** Elementos cuyo interior toca la selección → se muestran como fuente cruda. */
+function revealKeyOf(state: EditorState, els: VisualElement[]): string {
+  const sel = state.selection.ranges;
+  let key = "";
+  for (const el of els) {
+    if (sel.some((r) => r.from < el.to && r.to > el.from)) key += el.from + ",";
+  }
+  return key;
 }
 
 function makeDeco(state: EditorState, els: VisualElement[]): VState {
   const sel = state.selection.ranges;
   const ranges: Range<Decoration>[] = [];
+  let revealKey = "";
   for (const el of els) {
     // la selección toca el interior del elemento → se muestra la fuente cruda
-    if (sel.some((r) => r.from < el.to && r.to > el.from)) continue;
+    if (sel.some((r) => r.from < el.to && r.to > el.from)) {
+      revealKey += el.from + ",";
+      continue;
+    }
     for (const p of el.prims) {
       if (p.to <= p.from) continue;
       if (p.kind === "hide") ranges.push(Decoration.replace({}).range(p.from, p.to));
@@ -569,20 +608,70 @@ function makeDeco(state: EditorState, els: VisualElement[]): VState {
         );
     }
   }
-  return { els, deco: Decoration.set(ranges, true) };
+  return { els, deco: Decoration.set(ranges, true), revealKey };
 }
 
-// ponytail: re-escanea el documento completo en cada edición (los movimientos
-// de cursor solo re-filtran); si algún .tex enorme lo hace lento, pasar a
-// mapeo incremental de decoraciones.
+/** Desplaza elementos y prims a través de una edición; descarta los borrados. */
+function mapEls(els: VisualElement[], changes: ChangeDesc): VisualElement[] {
+  const out: VisualElement[] = [];
+  for (const el of els) {
+    const from = changes.mapPos(el.from, 1);
+    const to = changes.mapPos(el.to, -1);
+    if (to <= from) continue;
+    const prims: Prim[] = [];
+    for (const p of el.prims) {
+      const pf = changes.mapPos(p.from, 1);
+      const pt = changes.mapPos(p.to, -1);
+      if (pt > pf) prims.push({ ...p, from: pf, to: pt });
+    }
+    if (prims.length) out.push({ from, to, prims });
+  }
+  return out;
+}
+
+/** Resultado del re-escaneo diferido (lo despacha rescanPlugin). */
+export const rescanEffect = StateEffect.define<VisualElement[]>();
+
+// En cada edición solo se MAPEAN las decoraciones existentes (barato); el
+// escaneo completo del documento corre con debounce en rescanPlugin. El
+// elemento bajo el cursor ya está revelado mientras se escribe, así que el
+// retraso no se nota.
 export const visualField = StateField.define<VState>({
   create: (s) => makeDeco(s, scanVisual(s.doc.toString())),
   update(v, tr) {
-    if (tr.docChanged) return makeDeco(tr.state, scanVisual(tr.state.doc.toString()));
-    if (tr.selection) return makeDeco(tr.state, v.els);
+    for (const e of tr.effects) {
+      if (e.is(rescanEffect)) return makeDeco(tr.state, e.value);
+    }
+    if (tr.docChanged) {
+      return { els: mapEls(v.els, tr.changes), deco: v.deco.map(tr.changes), revealKey: v.revealKey };
+    }
+    if (tr.selection) {
+      // la mayoría de movimientos de cursor no cambian qué está revelado:
+      // evitar reconstruir todas las decoraciones
+      if (revealKeyOf(tr.state, v.els) === v.revealKey) return v;
+      return makeDeco(tr.state, v.els);
+    }
     return v;
   },
   provide: (f) => EditorView.decorations.from(f, (v) => v.deco),
+});
+
+/** Re-escaneo completo ~250ms después de la última edición. */
+const rescanPlugin = ViewPlugin.define((view) => {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  return {
+    update(u: ViewUpdate) {
+      if (!u.docChanged) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        view.dispatch({ effects: rescanEffect.of(scanVisual(view.state.doc.toString())) });
+      }, 250);
+    },
+    destroy() {
+      if (timer) clearTimeout(timer);
+    },
+  };
 });
 
 const theme = EditorView.theme({
@@ -654,5 +743,5 @@ export function visualLatex(labels?: {
 }): Extension {
   if (labels?.preamble) preambleLabel = labels.preamble;
   if (labels?.references) referencesLabel = labels.references;
-  return [visualField, theme];
+  return [visualField, rescanPlugin, theme];
 }

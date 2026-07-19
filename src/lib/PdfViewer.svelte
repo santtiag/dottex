@@ -28,6 +28,8 @@
   let zoom = $state(1.6); // multiplicador sobre "ajustar al ancho"; 160% por defecto
   let numPages = $state(0);
   let loadSeq = 0;
+  let renderSeq = 0; // invalida pinturas en vuelo cuando cambia doc/zoom/ancho
+  let paintTasks = new Set<{ cancel: () => void }>();
   let renderScale = 1; // px CSS por bp del último render
   let targetSeen = 0;
 
@@ -97,9 +99,15 @@
   // la página entra al viewport (IntersectionObserver).
   async function render() {
     if (!doc || !container) return;
+    const seq = ++renderSeq;
+    for (const t of paintTasks) t.cancel(); // pinturas del render anterior
+    paintTasks.clear();
     observer?.disconnect();
+    // conservar la posición como fracción: las alturas cambian con el zoom
+    const ratio = container.scrollHeight > 0 ? container.scrollTop / container.scrollHeight : 0;
     container.replaceChildren();
     const first = await doc.getPage(1);
+    if (seq !== renderSeq || !doc) return; // otro render/load empezó durante el await
     const base = first.getViewport({ scale: 1 });
     const fitWidth = Math.max(container.clientWidth - 32, 100) / base.width;
     const scale = fitWidth * zoom;
@@ -110,7 +118,7 @@
         for (const e of entries) {
           if (e.isIntersecting) {
             observer?.unobserve(e.target);
-            paintPage(e.target as HTMLElement, scale);
+            paintPage(e.target as HTMLElement, scale, seq);
           }
         }
       },
@@ -126,12 +134,14 @@
       container.appendChild(holder);
       observer.observe(holder);
     }
+    container.scrollTop = ratio * container.scrollHeight;
   }
 
-  async function paintPage(holder: HTMLElement, scale: number) {
-    if (!doc) return;
+  async function paintPage(holder: HTMLElement, scale: number, seq: number) {
+    if (!doc || seq !== renderSeq) return;
     try {
       const page = await doc.getPage(Number(holder.dataset.page));
+      if (seq !== renderSeq) return;
       const vp = page.getViewport({ scale });
       // El AppImage corre bajo X11 y WebKitGTK no refleja el escalado del
       // compositor en devicePixelRatio: allí forzamos 2x para que no salga
@@ -146,10 +156,18 @@
       holder.style.width = canvas.style.width;
       holder.style.height = canvas.style.height;
       const ctx = canvas.getContext("2d")!;
-      await page.render({ canvas, canvasContext: ctx, viewport: vp, transform: [dpr, 0, 0, dpr, 0, 0] }).promise;
+      const paint = page.render({ canvas, canvasContext: ctx, viewport: vp, transform: [dpr, 0, 0, dpr, 0, 0] });
+      paintTasks.add(paint);
+      try {
+        await paint.promise;
+      } finally {
+        paintTasks.delete(paint);
+      }
+      if (seq !== renderSeq) return;
       holder.replaceChildren(canvas);
     } catch (e) {
-      console.error("PDF page:", e);
+      // la cancelación por zoom/recarga no es un error
+      if ((e as Error)?.name !== "RenderingCancelledException") console.error("PDF page:", e);
     }
   }
 
@@ -157,6 +175,24 @@
     zoom = Math.min(4, Math.max(0.25, z));
     render();
   }
+
+  // Re-ajustar al ancho cuando cambia el tamaño del panel (arrastre del divisor).
+  $effect(() => {
+    if (!container) return;
+    let lastW = container.clientWidth;
+    let timer: ReturnType<typeof setTimeout>;
+    const ro = new ResizeObserver(() => {
+      if (container.clientWidth === lastW) return;
+      lastW = container.clientWidth;
+      clearTimeout(timer);
+      timer = setTimeout(render, 150);
+    });
+    ro.observe(container);
+    return () => {
+      clearTimeout(timer);
+      ro.disconnect();
+    };
+  });
 </script>
 
 <div class="viewer">

@@ -20,14 +20,25 @@ pub struct CompletionData {
 /// Labels, claves de bibliografía y comandos definidos en el proyecto.
 // ponytail: re-escanea todo el proyecto en cada llamada (el frontend cachea
 // 3s); indexar incrementalmente si algún día hay proyectos enormes.
+// async + spawn_blocking: relee todo el proyecto; fuera del hilo principal.
 #[tauri::command]
-pub fn completion_data(state: State<AppState>) -> Result<CompletionData, String> {
+pub async fn completion_data(state: State<'_, AppState>) -> Result<CompletionData, String> {
     let root = state.root()?;
+    tokio::task::spawn_blocking(move || completion_data_inner(root))
+        .await
+        .map_err(|e| e.to_string())
+}
 
-    let label_re = regex::Regex::new(r"\\label\s*\{([^}]+)\}").unwrap();
-    let cmd_re =
-        regex::Regex::new(r"\\(?:new|renew|provide)command\*?\s*\{?\\([a-zA-Z]+)").unwrap();
-    let def_re = regex::Regex::new(r"\\def\s*\\([a-zA-Z]+)").unwrap();
+fn completion_data_inner(root: std::path::PathBuf) -> CompletionData {
+    use std::sync::OnceLock;
+    static LABEL_RE: OnceLock<regex::Regex> = OnceLock::new();
+    static CMD_RE: OnceLock<regex::Regex> = OnceLock::new();
+    static DEF_RE: OnceLock<regex::Regex> = OnceLock::new();
+    let label_re = LABEL_RE.get_or_init(|| regex::Regex::new(r"\\label\s*\{([^}]+)\}").unwrap());
+    let cmd_re = CMD_RE.get_or_init(|| {
+        regex::Regex::new(r"\\(?:new|renew|provide)command\*?\s*\{?\\([a-zA-Z]+)").unwrap()
+    });
+    let def_re = DEF_RE.get_or_init(|| regex::Regex::new(r"\\def\s*\\([a-zA-Z]+)").unwrap());
 
     let mut labels = BTreeSet::new();
     let mut commands = BTreeSet::new();
@@ -61,11 +72,11 @@ pub fn completion_data(state: State<AppState>) -> Result<CompletionData, String>
         }
     }
 
-    Ok(CompletionData {
+    CompletionData {
         labels: labels.into_iter().collect(),
         cites,
         commands: commands.into_iter().collect(),
-    })
+    }
 }
 
 fn parse_bib(text: &str) -> Vec<Cite> {

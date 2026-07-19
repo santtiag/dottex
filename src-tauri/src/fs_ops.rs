@@ -17,6 +17,10 @@ pub fn start_watcher(app: AppHandle, root: PathBuf) -> notify::Result<notify::Re
     let mut watcher = notify::recommended_watcher(tx)?;
     watcher.watch(&root, RecursiveMode::Recursive)?;
     let dottex = root.join(".dottex");
+    // Tectonic genera ráfagas de eventos en .dottex/build durante cada
+    // compilación; mejor no recibirlas. Si el backend no soporta desobservar
+    // un subdirectorio, `classify` ya las filtra igualmente.
+    let _ = watcher.unwatch(&dottex);
     std::thread::spawn(move || {
         // (relevante, estructural); lo desconocido cuenta como estructural
         let classify = |ev: &notify::Result<notify::Event>| -> (bool, bool) {
@@ -64,9 +68,16 @@ const TEXT_EXTS: &[&str] = &[
 ];
 const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "avif"];
 
+// async: la lectura corre en el pool de tokio, no en el hilo principal del UI.
 #[tauri::command]
-pub fn read_file(state: State<AppState>, path: String) -> Result<FileContent, String> {
+pub async fn read_file(state: State<'_, AppState>, path: String) -> Result<FileContent, String> {
     let abs = state.resolve(&path)?;
+    tokio::task::spawn_blocking(move || read_file_inner(abs))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn read_file_inner(abs: std::path::PathBuf) -> Result<FileContent, String> {
     let ext = abs
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())
@@ -107,14 +118,20 @@ pub fn read_file(state: State<AppState>, path: String) -> Result<FileContent, St
 /// Contenido binario crudo (PDF, imágenes) como cuerpo de la respuesta IPC,
 /// sin pasar por JSON.
 #[tauri::command]
-pub fn read_file_bytes(state: State<AppState>, path: String) -> Result<tauri::ipc::Response, String> {
+pub async fn read_file_bytes(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<tauri::ipc::Response, String> {
     let abs = state.resolve(&path)?;
-    let bytes = fs::read(&abs).map_err(|e| format!("No se pudo leer el archivo: {e}"))?;
+    let bytes = tokio::task::spawn_blocking(move || fs::read(&abs))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("No se pudo leer el archivo: {e}"))?;
     Ok(tauri::ipc::Response::new(bytes))
 }
 
 #[tauri::command]
-pub fn write_file(state: State<AppState>, path: String, content: String) -> Result<(), String> {
+pub async fn write_file(state: State<'_, AppState>, path: String, content: String) -> Result<(), String> {
     let abs = state.resolve(&path)?;
     fs::write(&abs, content).map_err(|e| format!("No se pudo guardar: {e}"))
 }
@@ -182,7 +199,7 @@ pub fn delete_path(state: State<AppState>, path: String) -> Result<(), String> {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
     let trash = state.trash_dir()?;
-    let id = format!("{millis}__{name}");
+    let id = unique_trash_id(&trash, millis, &name);
     fs::rename(&abs, trash.join(&id)).map_err(|e| format!("No se pudo eliminar: {e}"))?;
     let meta = TrashMeta {
         original: path,
@@ -193,6 +210,17 @@ pub fn delete_path(state: State<AppState>, path: String) -> Result<(), String> {
         serde_json::to_string(&meta).unwrap_or_default(),
     );
     Ok(())
+}
+
+/// Dos borrados del mismo nombre en el mismo milisegundo no deben pisarse.
+fn unique_trash_id(trash: &std::path::Path, millis: u64, name: &str) -> String {
+    let mut id = format!("{millis}__{name}");
+    let mut n = 0u32;
+    while trash.join(&id).exists() {
+        n += 1;
+        id = format!("{millis}-{n}__{name}");
+    }
+    id
 }
 
 /// Un id de papelera es un nombre plano, nunca una ruta.
@@ -279,6 +307,23 @@ pub fn empty_trash(state: State<AppState>) -> Result<(), String> {
     let trash = state.trash_dir()?;
     let _ = fs::remove_dir_all(&trash);
     fs::create_dir_all(&trash).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trash_ids_no_colisionan_en_el_mismo_milisegundo() {
+        let tmp = std::env::temp_dir().join(format!("dottex-trash-test-{}", std::process::id()));
+        fs::create_dir_all(&tmp).unwrap();
+        let a = unique_trash_id(&tmp, 123, "x.tex");
+        fs::write(tmp.join(&a), "").unwrap();
+        let b = unique_trash_id(&tmp, 123, "x.tex");
+        assert_eq!(a, "123__x.tex");
+        assert_eq!(b, "123-1__x.tex");
+        fs::remove_dir_all(&tmp).unwrap();
+    }
 }
 
 /// Vacía .dottex/build y .dottex/cache ("Limpiar artefactos").
