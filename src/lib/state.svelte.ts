@@ -148,6 +148,16 @@ export async function setRootFile(path: string) {
   }
 }
 
+export async function setEngine(engine: string) {
+  try {
+    await ipc.setEngine(engine);
+    if (app.project) app.project.engine = engine;
+    requestCompile();
+  } catch (e) {
+    toast(String(e));
+  }
+}
+
 export async function saveActive(content: string) {
   if (!app.active) return;
   try {

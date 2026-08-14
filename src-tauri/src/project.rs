@@ -19,6 +19,8 @@ pub struct ProjectInfo {
     pub name: String,
     pub path: String,
     pub root_file: Option<String>,
+    /// "tectonic" | "pdflatex" | "xelatex" | "lualatex"
+    pub engine: String,
     pub tree: Vec<TreeNode>,
 }
 
@@ -28,9 +30,33 @@ pub struct RecentProject {
     pub path: String,
 }
 
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Clone)]
 struct ProjectConfig {
     root_file: Option<String>,
+    #[serde(default = "default_engine")]
+    engine: String,
+}
+
+fn default_engine() -> String {
+    "tectonic".into()
+}
+
+impl Default for ProjectConfig {
+    fn default() -> Self {
+        Self {
+            root_file: None,
+            engine: default_engine(),
+        }
+    }
+}
+
+pub(crate) fn normalize_engine(s: &str) -> Result<String, String> {
+    match s {
+        "tectonic" | "pdflatex" | "xelatex" | "lualatex" => Ok(s.into()),
+        _ => Err(format!(
+            "Compilador desconocido: {s}. Usa tectonic, pdflatex, xelatex o lualatex."
+        )),
+    }
 }
 
 pub fn data_dir() -> PathBuf {
@@ -47,7 +73,7 @@ pub async fn open_project(
     state: State<'_, AppState>,
     path: String,
 ) -> Result<ProjectInfo, String> {
-    let (root, root_file, tree) = tokio::task::spawn_blocking(move || -> Result<_, String> {
+    let (root, root_file, engine, tree) = tokio::task::spawn_blocking(move || -> Result<_, String> {
         let root =
             fs::canonicalize(&path).map_err(|e| format!("No se pudo abrir la carpeta: {e}"))?;
         if !root.is_dir() {
@@ -57,10 +83,14 @@ pub async fn open_project(
             fs::create_dir_all(root.join(".dottex").join(sub))
                 .map_err(|e| format!("No se pudo crear .dottex/ (¿permisos?): {e}"))?;
         }
+        let mut cfg = load_config(&root);
         let root_file = resolve_root_file(&root);
-        save_config(&root, &root_file);
+        cfg.root_file = root_file.clone();
+        cfg.engine = normalize_engine(&cfg.engine).unwrap_or_else(|_| default_engine());
+        save_config(&root, &cfg);
+        let engine = cfg.engine;
         let tree = scan_tree(&root, &root);
-        Ok((root, root_file, tree))
+        Ok((root, root_file, engine, tree))
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -77,6 +107,7 @@ pub async fn open_project(
     *crate::lock_or_recover(&state.project) = Some(Project {
         root: root.clone(),
         root_file: root_file.clone(),
+        engine: engine.clone(),
         watcher,
     });
     // el SyncTeX cacheado pertenece al proyecto anterior
@@ -88,6 +119,7 @@ pub async fn open_project(
         name,
         path: root.display().to_string(),
         root_file,
+        engine,
         tree,
     })
 }
@@ -111,7 +143,23 @@ pub fn set_root_file(state: State<AppState>, path: String) -> Result<(), String>
     if let Some(p) = crate::lock_or_recover(&state.project).as_mut() {
         p.root_file = Some(path.clone());
     }
-    save_config(&root, &Some(path));
+    let mut cfg = load_config(&root);
+    cfg.root_file = Some(path);
+    save_config(&root, &cfg);
+    Ok(())
+}
+
+/// Fija el motor LaTeX del proyecto (persistido en .dottex/config.json).
+#[tauri::command]
+pub fn set_engine(state: State<AppState>, engine: String) -> Result<(), String> {
+    let engine = normalize_engine(&engine)?;
+    let root = state.root()?;
+    if let Some(p) = crate::lock_or_recover(&state.project).as_mut() {
+        p.engine = engine.clone();
+    }
+    let mut cfg = load_config(&root);
+    cfg.engine = engine;
+    save_config(&root, &cfg);
     Ok(())
 }
 
@@ -195,11 +243,15 @@ fn resolve_root_file(root: &Path) -> Option<String> {
     detect_root_file(root)
 }
 
-fn save_config(root: &Path, root_file: &Option<String>) {
-    let cfg = ProjectConfig {
-        root_file: root_file.clone(),
-    };
-    if let Ok(json) = serde_json::to_string_pretty(&cfg) {
+fn load_config(root: &Path) -> ProjectConfig {
+    fs::read_to_string(root.join(".dottex").join("config.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_config(root: &Path, cfg: &ProjectConfig) {
+    if let Ok(json) = serde_json::to_string_pretty(cfg) {
         let _ = fs::write(root.join(".dottex").join("config.json"), json);
     }
 }

@@ -61,6 +61,12 @@ To manage it yourself, install Tectonic via your package manager
 (`dnf install tectonic`, `brew install tectonic`, `cargo install tectonic`…)
 and dottex will use that instead.
 
+Templates that require pdfLaTeX (MDPI, some journals) will fail under Tectonic.
+In **Settings → Compilation**, switch the project engine to pdfLaTeX, XeLaTeX,
+or LuaLaTeX. Those use `latexmk` from a system TeX Live or MiKTeX install
+(e.g. `sudo dnf install texlive-scheme-medium texlive-collection-latexextra texlive-collection-fontsrecommended latexmk`). The choice
+is stored per project in `.dottex/config.json`.
+
 ## Installation
 
 Prebuilt installers for Linux, macOS, and Windows are published on the
@@ -81,6 +87,8 @@ sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev build-essential
 pnpm install
 pnpm tauri dev      # development
 pnpm tauri build    # .deb, .rpm, AppImage
+# NO_STRIP / APPIMAGE_EXTRACT_AND_RUN van en el script `tauri` (linuxdeploy
+# no puede strippear ELF modernos en Fedora).
 ```
 
 ### macOS

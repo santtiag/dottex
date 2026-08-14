@@ -11,6 +11,7 @@ export interface ProjectInfo {
   name: string;
   path: string;
   root_file: string | null;
+  engine: string;
   tree: TreeNode[];
 }
 
@@ -82,6 +83,7 @@ export interface TrashEntry {
 
 export const openProject = (path: string) => invoke<ProjectInfo>("open_project", { path });
 export const setRootFile = (path: string) => invoke("set_root_file", { path });
+export const setEngine = (engine: string) => invoke("set_engine", { engine });
 export const searchProject = (query: string, isRegex: boolean, caseSensitive: boolean) =>
   invoke<SearchHit[]>("search_project", { query, isRegex, caseSensitive });
 export const replaceInProject = (

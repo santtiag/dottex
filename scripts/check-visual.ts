@@ -123,6 +123,13 @@ const inside = mk(mathEl.from + 1).field(visualField).deco.size;
 assert(outside > 0, "hay decoraciones");
 assert(inside === outside - 1, `reveal: ${outside} → ${inside}`);
 
+const locked = EditorState.create({
+  doc,
+  selection: { anchor: mathEl.from + 1 },
+  extensions: [visualLatex({ reveal: false })],
+});
+assert(locked.field(visualField).deco.size === outside, "reveal:false no revela bajo el cursor");
+
 // editar solo mapea las decoraciones (barato); el re-escaneo llega después
 // como rescanEffect (en la app lo despacha rescanPlugin con debounce)
 const tr = mk(0).update({ changes: { from: doc.indexOf("Texto"), insert: "$y$ " } });

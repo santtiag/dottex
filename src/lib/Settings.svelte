@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { app, settings } from "./state.svelte";
+  import { app, setEngine, settings } from "./state.svelte";
   import { editorThemes } from "./editorThemes";
   import { t, LOCALES, type MsgKey } from "./i18n.svelte";
 
@@ -7,7 +7,7 @@
 
   let { onClose }: { onClose: () => void } = $props();
 
-  let section = $state<"editor" | "appearance" | "language">("editor");
+  let section = $state<"editor" | "appearance" | "language" | "compile">("editor");
 
   // Solo se ofrecen fuentes realmente instaladas: si una no existe, el CSS
   // cae al fallback y "cambiar de fuente" no cambia nada (bug clásico).
@@ -60,6 +60,7 @@
   const CATS: [typeof section, MsgKey][] = [
     ["editor", "catEditor"],
     ["appearance", "catAppearance"],
+    ["compile", "catCompile"],
     ["language", "catLanguage"],
   ];
 </script>
@@ -152,6 +153,26 @@
               <option value="dark">{t("themeDark")}</option>
             </select>
           </label>
+        {:else if section === "compile"}
+          {#if app.project}
+            <label class="row">
+              <span class="lbl">{t("engine")}<small>{t("engineDesc")}</small></span>
+              <select
+                bind:value={app.project.engine}
+                onchange={() => {
+                  if (app.project) setEngine(app.project.engine);
+                }}
+              >
+                <option value="tectonic">Tectonic</option>
+                <option value="pdflatex">pdfLaTeX</option>
+                <option value="xelatex">XeLaTeX</option>
+                <option value="lualatex">LuaLaTeX</option>
+              </select>
+            </label>
+            <p class="hint">{t("engineHint")}</p>
+          {:else}
+            <p class="hint">{t("engineNoProject")}</p>
+          {/if}
         {:else}
           <label class="row">
             <span class="lbl">{t("uiLanguage")}<small>{t("uiLanguageDesc")}</small></span>

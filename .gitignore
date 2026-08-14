@@ -13,3 +13,4 @@ vite.config.ts.timestamp-*
 PROMPT-WEB.md
 .playwright-cli
 .vscode
+testing

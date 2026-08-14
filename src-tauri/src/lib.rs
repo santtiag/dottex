@@ -17,6 +17,8 @@ pub struct Project {
     pub root: PathBuf,
     /// Ruta del .tex raíz, relativa a `root`.
     pub root_file: Option<String>,
+    /// "tectonic" | "pdflatex" | "xelatex" | "lualatex"
+    pub engine: String,
     #[allow(dead_code)]
     watcher: notify::RecommendedWatcher,
 }
@@ -107,6 +109,14 @@ impl AppState {
             })
     }
 
+    pub fn engine(&self) -> Result<String, String> {
+        Ok(lock_or_recover(&self.project)
+            .as_ref()
+            .ok_or("No hay proyecto abierto")?
+            .engine
+            .clone())
+    }
+
     // Layout interno de .dottex/: única fuente de verdad de las rutas.
     pub fn dottex_dir(&self) -> Result<PathBuf, String> {
         Ok(self.root()?.join(".dottex"))
@@ -140,6 +150,7 @@ mod tests {
             project: Mutex::new(Some(Project {
                 root: root.to_path_buf(),
                 root_file: None,
+                engine: "tectonic".into(),
                 watcher,
             })),
             ..Default::default()
@@ -196,6 +207,7 @@ pub fn run() {
             project::get_recent_projects,
             project::list_tree,
             project::set_root_file,
+            project::set_engine,
             fs_ops::read_file,
             fs_ops::read_file_bytes,
             fs_ops::write_file,

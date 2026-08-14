@@ -49,9 +49,21 @@
   let pdfW = $state(480);
   let logEl: HTMLDivElement | undefined = $state();
   let settingsOpen = $state(false);
-  // modo del editor para .tex: fuente cruda o WYSIWYG (por sesión)
-  let viewMode = $state<"code" | "visual">("code");
+  // layout de paneles .tex: código|visual a la izquierda, pdf|visual-lectura a la derecha
+  let layout = $state<"code-pdf" | "visual-pdf" | "code-visual">("code-pdf");
+  let liveTex = $state("");
   const isTex = $derived(app.active?.kind === "text" && app.active.path.endsWith(".tex"));
+  $effect.pre(() => {
+    const a = app.active;
+    void a?.path;
+    liveTex = a?.kind === "text" ? a.content : "";
+  });
+  function setLeft(v: "code" | "visual") {
+    layout = v === "visual" ? "visual-pdf" : layout === "code-visual" ? "code-visual" : "code-pdf";
+  }
+  function setRight(v: "pdf" | "visual") {
+    layout = v === "visual" ? "code-visual" : layout === "visual-pdf" ? "visual-pdf" : "code-pdf";
+  }
   // buffer en vivo del editor: compilar siempre guarda lo que se ve en pantalla
   let editorRef = $state<{ getText: () => string | undefined }>();
   // menú del proyecto (abrir otra carpeta, recientes, cerrar)
@@ -340,10 +352,10 @@
             </span>
             {#if isTex}
               <div class="viewmode">
-                <button class:active={viewMode === "code"} onclick={() => (viewMode = "code")}>
+                <button class:active={layout !== "visual-pdf"} onclick={() => setLeft("code")}>
                   {t("viewCode")}
                 </button>
-                <button class:active={viewMode === "visual"} onclick={() => (viewMode = "visual")}>
+                <button class:active={layout === "visual-pdf"} onclick={() => setLeft("visual")}>
                   {t("viewVisual")}
                 </button>
               </div>
@@ -359,7 +371,7 @@
             content={app.active.content}
             {dark}
             auto={app.auto}
-            visual={viewMode === "visual" && isTex}
+            visual={layout === "visual-pdf" && isTex}
             goto={app.goto}
             onSave={saveActive}
             onDirty={() => {
@@ -370,6 +382,7 @@
             onCompile={compileActive}
             onCursor={(l) => (app.cursorLine = l)}
             onSyncClick={(l) => syncToPdf(l)}
+            onDocChange={(text) => (liveTex = text)}
           />
         {:else if app.active.kind === "image"}
           {#await fileBlobUrl(app.active.path) then url}
@@ -386,7 +399,25 @@
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <div class="resizer" role="separator" aria-orientation="vertical" onmousedown={(e) => dragResize(e, "right")}></div>
         <aside class="pdfpane">
-          <PdfViewer source={app.pdf} target={app.pdfTarget} onSyncClick={syncFromPdf} />
+          {#if isTex}
+            <div class="editorbar">
+              <div class="viewmode">
+                <button class:active={layout !== "code-visual"} onclick={() => setRight("pdf")}>
+                  {t("viewPdf")}
+                </button>
+                <button class:active={layout === "code-visual"} onclick={() => setRight("visual")}>
+                  {t("viewVisual")}
+                </button>
+              </div>
+            </div>
+          {/if}
+          <div class="pdfbody">
+            {#if layout === "code-visual" && isTex && app.active?.kind === "text"}
+              <Editor path={app.active.path} content={liveTex} {dark} visual readonly />
+            {:else}
+              <PdfViewer source={app.pdf} target={app.pdfTarget} onSyncClick={syncFromPdf} />
+            {/if}
+          </div>
         </aside>
       {/if}
     </main>
@@ -681,6 +712,13 @@
     min-width: 0;
     overflow: hidden;
     border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+  }
+  .pdfbody {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
   }
   .resizer {
     cursor: col-resize;

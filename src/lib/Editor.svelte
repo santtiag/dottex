@@ -46,32 +46,37 @@
     path,
     content,
     dark,
-    auto,
-    visual,
-    goto,
+    auto = false,
+    visual = false,
+    readonly = false,
+    goto = null,
     onSave,
     onDirty,
     onIdle,
     onCompile,
     onCursor,
     onSyncClick,
+    onDocChange,
   }: {
     path: string;
     content: string;
     dark: boolean;
-    auto: boolean;
+    auto?: boolean;
     /** modo Visual: sintaxis LaTeX oculta/renderizada en línea */
-    visual: boolean;
-    goto: { line: number; seq: number } | null;
-    onSave: (text: string) => void;
-    onDirty: () => void;
+    visual?: boolean;
+    /** preview: no edita, sin barra, sin cursor-reveal */
+    readonly?: boolean;
+    goto?: { line: number; seq: number } | null;
+    onSave?: (text: string) => void;
+    onDirty?: () => void;
     /** ~450ms sin teclear con vista previa automática activa */
-    onIdle: (text: string) => void;
+    onIdle?: (text: string) => void;
     /** Mod-Enter: guardar y compilar */
-    onCompile: (text: string) => void;
-    onCursor: (line: number) => void;
+    onCompile?: (text: string) => void;
+    onCursor?: (line: number) => void;
     /** Ctrl/Cmd+clic: sincronizar con el PDF (SyncTeX forward) */
-    onSyncClick: (line: number) => void;
+    onSyncClick?: (line: number) => void;
+    onDocChange?: (text: string) => void;
   } = $props();
 
   let host: HTMLDivElement;
@@ -169,15 +174,17 @@
   /** Extensiones que dependen de la configuración del usuario. */
   function optExts() {
     return [
-      settings.vim ? vim() : [], // debe preceder al resto de keymaps
-      settings.autocomplete ? [autocompletion(), keymap.of(completionKeymap)] : [],
-      settings.closeBrackets ? [closeBrackets(), keymap.of(closeBracketsKeymap)] : [],
+      readonly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : [],
+      !readonly && settings.vim ? vim() : [], // debe preceder al resto de keymaps
+      !readonly && settings.autocomplete ? [autocompletion(), keymap.of(completionKeymap)] : [],
+      !readonly && settings.closeBrackets ? [closeBrackets(), keymap.of(closeBracketsKeymap)] : [],
       drawSelection({ cursorBlinkRate: settings.steadyCursor ? 0 : 1200 }),
-      settings.mathPreview ? mathPreview : [],
+      !readonly && settings.mathPreview ? mathPreview : [],
       visual
         ? visualLatex({
             preamble: (n) => t("preambleLines", n),
             references: () => t("references"),
+            reveal: !readonly,
           })
         : [],
       EditorView.contentAttributes.of({
@@ -202,7 +209,7 @@
           {
             key: "Mod-s",
             run: (v) => {
-              onSave(v.state.doc.toString());
+              onSave?.(v.state.doc.toString());
               return true;
             },
           },
@@ -210,7 +217,7 @@
             // antes que defaultKeymap: sin esto Enter inserta salto de línea
             key: "Mod-Enter",
             run: (v) => {
-              onCompile(v.state.doc.toString());
+              onCompile?.(v.state.doc.toString());
               return true;
             },
           },
@@ -251,19 +258,22 @@
         EditorView.lineWrapping,
         EditorView.updateListener.of((u) => {
           if (u.docChanged && !syncing) {
-            onDirty();
-            if (auto) {
-              clearTimeout(idleTimer);
-              idleTimer = setTimeout(() => onIdle(u.view.state.doc.toString()), 450);
+            onDocChange?.(u.view.state.doc.toString());
+            if (!readonly) {
+              onDirty?.();
+              if (auto && onIdle) {
+                clearTimeout(idleTimer);
+                idleTimer = setTimeout(() => onIdle(u.view.state.doc.toString()), 450);
+              }
             }
           }
-          if (u.selectionSet || u.docChanged) {
-            onCursor(u.state.doc.lineAt(u.state.selection.main.head).number);
+          if (!readonly && (u.selectionSet || u.docChanged)) {
+            onCursor?.(u.state.doc.lineAt(u.state.selection.main.head).number);
           }
         }),
         EditorView.domEventHandlers({
           mousedown(e, v) {
-            if (!(e.ctrlKey || e.metaKey)) return false;
+            if (readonly || !(e.ctrlKey || e.metaKey) || !onSyncClick) return false;
             const pos = v.posAtCoords({ x: e.clientX, y: e.clientY });
             if (pos == null) return false;
             onSyncClick(v.state.doc.lineAt(pos).number);
@@ -320,7 +330,7 @@
 </script>
 
 <div class="wrap">
-  {#if isTex}
+  {#if isTex && !readonly}
     <div class="latexbar">
       <button title={t("tbUndo")} onclick={() => toolCmd(undo)}>↶</button>
       <button title={t("tbRedo")} onclick={() => toolCmd(redo)}>↷</button>

@@ -59,6 +59,9 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # linuxdeploy + strip rompe ELF con .relr.dyn (Fedora / Ubuntu reciente)
+          NO_STRIP: true
+          APPIMAGE_EXTRACT_AND_RUN: 1
         with:
           # Usa la etiqueta que disparó el workflow (ej. v0.1.0).
           tagName: ${{ github.ref_name }}

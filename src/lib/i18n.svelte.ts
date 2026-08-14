@@ -35,6 +35,7 @@ const es = {
   unsupportedFormat: "Formato no soportado: {0}",
   viewCode: "Código",
   viewVisual: "Visual",
+  viewPdf: "PDF",
   preambleLines: "Preámbulo — {0} líneas",
   references: "Referencias",
 
@@ -134,6 +135,7 @@ const es = {
   catEditor: "Editor",
   catAppearance: "Apariencia",
   catLanguage: "Idioma",
+  catCompile: "Compilación",
 
   // Configuración: editor
   autocomplete: "Autocompletado",
@@ -169,6 +171,13 @@ const es = {
   spellcheckDesc: "Subraya errores usando el corrector del sistema",
   spellLang: "Idioma del corrector",
   dictHint: "Diccionario propio: clic derecho sobre una palabra subrayada → «Añadir al diccionario».",
+
+  // Configuración: compilación
+  engine: "Compilador",
+  engineDesc: "Motor LaTeX de este proyecto",
+  engineHint:
+    "Tectonic no requiere instalar nada. pdfLaTeX, XeLaTeX y LuaLaTeX usan TeX Live o MiKTeX del sistema (MDPI: scheme-medium + latexextra + fontsrecommended + latexmk).",
+  engineNoProject: "Abre un proyecto para elegir el compilador.",
 };
 
 const en: typeof es = {
@@ -199,6 +208,7 @@ const en: typeof es = {
   unsupportedFormat: "Unsupported format: {0}",
   viewCode: "Code",
   viewVisual: "Visual",
+  viewPdf: "PDF",
   preambleLines: "Preamble — {0} lines",
   references: "References",
 
@@ -289,6 +299,7 @@ const en: typeof es = {
   catEditor: "Editor",
   catAppearance: "Appearance",
   catLanguage: "Language",
+  catCompile: "Compilation",
 
   autocomplete: "Autocomplete",
   autocompleteDesc: "Suggests commands, references and snippets as you type",
@@ -321,6 +332,12 @@ const en: typeof es = {
   spellcheckDesc: "Underlines errors using the system checker",
   spellLang: "Spell-check language",
   dictHint: "Personal dictionary: right-click an underlined word → “Add to dictionary”.",
+
+  engine: "Compiler",
+  engineDesc: "LaTeX engine for this project",
+  engineHint:
+    "Tectonic needs nothing installed. pdfLaTeX, XeLaTeX and LuaLaTeX use system TeX Live or MiKTeX (MDPI: scheme-medium + latexextra + fontsrecommended + latexmk).",
+  engineNoProject: "Open a project to choose the compiler.",
 };
 
 const dicts = { es, en };

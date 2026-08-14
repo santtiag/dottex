@@ -91,20 +91,24 @@ fn build_pdf_path(state: &AppState) -> Result<PathBuf, String> {
 async fn run_compile(app: &AppHandle, state: &AppState) -> Result<(), String> {
     let root = state.root()?;
     let root_file = state.root_file()?;
+    let mut engine_name = crate::project::normalize_engine(&state.engine()?)?;
+    let build_dir = state.build_dir()?;
 
-    // el binario se resuelve/instala una sola vez por sesión
-    let cached = crate::lock_or_recover(&state.tectonic).clone();
-    let engine = match cached {
-        Some(p) if p.is_file() => p,
-        _ => {
-            let app2 = app.clone();
-            let p = tokio::task::spawn_blocking(move || find_or_install_tectonic(&app2))
-                .await
-                .map_err(|e| e.to_string())??;
-            *crate::lock_or_recover(&state.tectonic) = Some(p.clone());
-            p
+    let tex_src = std::fs::read_to_string(root.join(&root_file)).ok();
+    if engine_name == "tectonic" {
+        if tex_src.as_deref().is_some_and(documentclass_wants_pdflatex) {
+            engine_name = "pdflatex".into();
+            emit_log(
+                app,
+                "documentclass[pdftex]: Tectonic no es compatible; usando pdflatex",
+            );
         }
-    };
+    }
+    if engine_name != "tectonic" {
+        if let Some(tex) = &tex_src {
+            preflight_classic(tex)?;
+        }
+    }
 
     emit_status(
         app,
@@ -115,22 +119,221 @@ async fn run_compile(app: &AppHandle, state: &AppState) -> Result<(), String> {
             issues: Vec::new(),
         },
     );
-    emit_log(app, format!("$ tectonic -X compile {root_file}"));
 
-    let build_dir = state.build_dir()?;
-    let mut child = tokio::process::Command::new(&engine)
-        .args(["-X", "compile", &root_file, "--synctex", "--keep-logs", "--keep-intermediates"])
-        .arg("--outdir")
-        .arg(&build_dir)
-        .current_dir(&root)
+    let (bin, args) = if engine_name == "tectonic" {
+        (resolve_tectonic(app, state).await?, tectonic_args(&root_file, &build_dir))
+    } else {
+        resolve_classic(&engine_name, &root_file, &build_dir)?
+    };
+    emit_log(app, format!("$ {} {}", bin.display(), args.join(" ")));
+
+    let status = spawn_logged(app, &bin, &args, &root).await?;
+
+    let stem = state.pdf_stem()?;
+    let issues = std::fs::read_to_string(build_dir.join(format!("{stem}.log")))
+        .map(|log| parse_log(&log))
+        .unwrap_or_default();
+
+    if !status.success() {
+        let message = compile_fail_message(&issues);
+        emit_status(
+            app,
+            CompileStatus {
+                state: "error".into(),
+                message: Some(message),
+                pdf_path: None,
+                issues,
+            },
+        );
+        return Ok(());
+    }
+
+    emit_status(
+        app,
+        CompileStatus {
+            state: "ok".into(),
+            message: None,
+            pdf_path: Some(format!(".dottex/build/{stem}.pdf")),
+            issues,
+        },
+    );
+    Ok(())
+}
+
+async fn resolve_tectonic(app: &AppHandle, state: &AppState) -> Result<PathBuf, String> {
+    let cached = crate::lock_or_recover(&state.tectonic).clone();
+    match cached {
+        Some(p) if p.is_file() => Ok(p),
+        _ => {
+            let app2 = app.clone();
+            let p = tokio::task::spawn_blocking(move || find_or_install_tectonic(&app2))
+                .await
+                .map_err(|e| e.to_string())??;
+            *crate::lock_or_recover(&state.tectonic) = Some(p.clone());
+            Ok(p)
+        }
+    }
+}
+
+fn tectonic_args(root_file: &str, build_dir: &Path) -> Vec<String> {
+    vec![
+        "-X".into(),
+        "compile".into(),
+        root_file.into(),
+        "--synctex".into(),
+        "--keep-logs".into(),
+        "--keep-intermediates".into(),
+        "--outdir".into(),
+        build_dir.to_string_lossy().into_owned(),
+    ]
+}
+
+fn documentclass_wants_pdflatex(tex: &str) -> bool {
+    let Some(i) = tex.find("\\documentclass") else {
+        return false;
+    };
+    let rest = &tex[i..];
+    let Some(ob) = rest.find('[') else {
+        return false;
+    };
+    let Some(cb) = rest.find(']') else {
+        return false;
+    };
+    if cb < ob {
+        return false;
+    }
+    rest[ob + 1..cb]
+        .split(',')
+        .map(str::trim)
+        .any(|o| o.eq_ignore_ascii_case("pdftex"))
+}
+
+fn texlive_install_hint() -> &'static str {
+    if cfg!(windows) {
+        "instala MiKTeX o TeX Live completo"
+    } else if cfg!(target_os = "macos") {
+        "brew install --cask mactex-no-gui"
+    } else if Path::new("/usr/bin/dnf").is_file() {
+        "sudo dnf install texlive-scheme-medium texlive-collection-latexextra texlive-collection-fontsrecommended latexmk"
+    } else {
+        "sudo apt install texlive-latex-recommended texlive-fonts-recommended texlive-latex-extra latexmk"
+    }
+}
+
+fn kpsewhich(name: &str) -> bool {
+    let Some(bin) = find_on_path("kpsewhich") else {
+        return true;
+    };
+    std::process::Command::new(bin)
+        .arg(name)
+        .output()
+        .map(|o| o.status.success() && !o.stdout.is_empty())
+        .unwrap_or(true)
+}
+
+/// Canarios de MDPI/pdfLaTeX. Si no hay kpsewhich, pdflatex fallará con su log.
+fn preflight_classic(tex: &str) -> Result<(), String> {
+    if !documentclass_wants_pdflatex(tex) {
+        return Ok(());
+    }
+    let missing: Vec<&str> = ["fancyhdr.sty", "ecrm1000.tfm"]
+        .into_iter()
+        .filter(|n| !kpsewhich(n))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "TeX Live incompleto (falta {}). Las plantillas MDPI necesitan pdfLaTeX con paquetes extra: {}",
+        missing.join(", "),
+        texlive_install_hint()
+    ))
+}
+
+fn missing_tex_file(msg: &str) -> Option<&str> {
+    let start = msg.find('`')?;
+    let rest = &msg[start + 1..];
+    let end = rest.find('\'')?;
+    let name = &rest[..end];
+    (name.ends_with(".sty") || name.ends_with(".cls") || name.ends_with(".tfm")).then_some(name)
+}
+
+fn compile_fail_message(issues: &[Issue]) -> String {
+    let missing: Vec<&str> = issues
+        .iter()
+        .filter_map(|i| missing_tex_file(&i.message))
+        .collect();
+    if missing.is_empty() {
+        "La compilación falló; revisa los problemas o el log".into()
+    } else {
+        format!(
+            "Falta {}: {}. Revisa los problemas o el log.",
+            missing.join(", "),
+            texlive_install_hint()
+        )
+    }
+}
+
+fn resolve_classic(
+    engine: &str,
+    root_file: &str,
+    build_dir: &Path,
+) -> Result<(PathBuf, Vec<String>), String> {
+    if let Some(latexmk) = find_on_path("latexmk") {
+        return Ok((latexmk, latexmk_args(engine, root_file, build_dir)?));
+    }
+    let bin = find_on_path(engine).ok_or_else(|| {
+        format!(
+            "No se encontró {engine} ni latexmk. Instala TeX Live ({}) o cambia el compilador a Tectonic en Configuración.",
+            texlive_install_hint()
+        )
+    })?;
+    Ok((bin, classic_args(root_file, build_dir)))
+}
+
+fn classic_args(root_file: &str, build_dir: &Path) -> Vec<String> {
+    vec![
+        "-interaction=nonstopmode".into(),
+        "-synctex=1".into(),
+        "-output-directory".into(),
+        build_dir.to_string_lossy().into_owned(),
+        root_file.into(),
+    ]
+}
+
+fn latexmk_args(engine: &str, root_file: &str, build_dir: &Path) -> Result<Vec<String>, String> {
+    let flag = match engine {
+        "pdflatex" => "-pdf",
+        "xelatex" => "-xelatex",
+        "lualatex" => "-lualatex",
+        other => {
+            return Err(format!("latexmk no aplica a {other}"));
+        }
+    };
+    Ok(vec![
+        flag.into(),
+        "-interaction=nonstopmode".into(),
+        "-synctex=1".into(),
+        format!("-outdir={}", build_dir.display()),
+        root_file.into(),
+    ])
+}
+
+async fn spawn_logged(
+    app: &AppHandle,
+    bin: &Path,
+    args: &[String],
+    cwd: &Path,
+) -> Result<std::process::ExitStatus, String> {
+    let mut child = tokio::process::Command::new(bin)
+        .args(args)
+        .current_dir(cwd)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        // si el future se dropea (cierre de la app), no dejar tectonic huérfano
         .kill_on_drop(true)
         .spawn()
-        .map_err(|e| format!("No se pudo ejecutar Tectonic ({}): {e}", engine.display()))?;
+        .map_err(|e| format!("No se pudo ejecutar {}: {e}", bin.display()))?;
 
-    // Tectonic escribe su log a stderr; retransmitimos ambos como eventos.
     let mut tasks = Vec::new();
     if let Some(out) = child.stdout.take() {
         let app = app.clone();
@@ -154,35 +357,7 @@ async fn run_compile(app: &AppHandle, state: &AppState) -> Result<(), String> {
     for t in tasks {
         let _ = t.await;
     }
-
-    let stem = state.pdf_stem()?;
-    let issues = std::fs::read_to_string(build_dir.join(format!("{stem}.log")))
-        .map(|log| parse_log(&log))
-        .unwrap_or_default();
-
-    if !status.success() {
-        emit_status(
-            app,
-            CompileStatus {
-                state: "error".into(),
-                message: Some("La compilación falló; revisa los problemas o el log".into()),
-                pdf_path: None,
-                issues,
-            },
-        );
-        return Ok(());
-    }
-
-    emit_status(
-        app,
-        CompileStatus {
-            state: "ok".into(),
-            message: None,
-            pdf_path: Some(format!(".dottex/build/{stem}.pdf")),
-            issues,
-        },
-    );
-    Ok(())
+    Ok(status)
 }
 
 // ponytail: herramienta de checksum del sistema (como curl/tar más abajo);
@@ -211,6 +386,18 @@ fn sha256_file(path: &Path) -> Result<String, String> {
         .ok_or_else(|| "Salida de checksum irreconocible".into())
 }
 
+fn find_on_path(name: &str) -> Option<PathBuf> {
+    let bin = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    };
+    let paths = std::env::var_os("PATH")?;
+    std::env::split_paths(&paths)
+        .map(|dir| dir.join(&bin))
+        .find(|p| p.is_file())
+}
+
 fn tectonic_binary_name() -> &'static str {
     if cfg!(windows) {
         "tectonic.exe"
@@ -223,13 +410,8 @@ fn tectonic_binary_name() -> &'static str {
 /// lo descarga de GitHub Releases (única vez que se necesita red, junto con
 /// la primera descarga de paquetes LaTeX del propio Tectonic).
 fn find_or_install_tectonic(app: &AppHandle) -> Result<PathBuf, String> {
-    if let Some(paths) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&paths) {
-            let candidate = dir.join(tectonic_binary_name());
-            if candidate.is_file() {
-                return Ok(candidate);
-            }
-        }
+    if let Some(p) = find_on_path("tectonic") {
+        return Ok(p);
     }
     let installed = project::data_dir().join("bin").join(tectonic_binary_name());
     if installed.is_file() {
@@ -251,6 +433,56 @@ mod tests {
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
         let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn latexmk_args_por_motor() {
+        let d = Path::new("/tmp/build");
+        let pdf = latexmk_args("pdflatex", "main.tex", d).unwrap();
+        assert_eq!(
+            pdf,
+            [
+                "-pdf",
+                "-interaction=nonstopmode",
+                "-synctex=1",
+                "-outdir=/tmp/build",
+                "main.tex"
+            ]
+        );
+        assert_eq!(latexmk_args("xelatex", "a.tex", d).unwrap()[0], "-xelatex");
+        assert_eq!(latexmk_args("lualatex", "a.tex", d).unwrap()[0], "-lualatex");
+        assert!(latexmk_args("tectonic", "a.tex", d).is_err());
+    }
+
+    #[test]
+    fn documentclass_pdftex_detecta_mdpi() {
+        let mdpi = r"\documentclass[journal,article,submit,pdftex,moreauthors]{Definitions/mdpi}";
+        assert!(documentclass_wants_pdflatex(mdpi));
+        assert!(!documentclass_wants_pdflatex(r"\documentclass{article}"));
+        assert!(!documentclass_wants_pdflatex(r"\documentclass[xelatex]{article}"));
+    }
+
+    #[test]
+    fn preflight_omite_article_sin_pdftex() {
+        assert!(preflight_classic(r"\documentclass{article}").is_ok());
+    }
+
+    #[test]
+    fn compile_fail_menciona_sty_ausente() {
+        let issues = vec![Issue {
+            severity: "error".into(),
+            file: Some("Definitions/mdpi.cls".into()),
+            line: Some(36),
+            message: "LaTeX Error: File `fancyhdr.sty' not found.".into(),
+        }];
+        let msg = compile_fail_message(&issues);
+        assert!(msg.contains("fancyhdr.sty"));
+        assert!(
+            msg.contains("dnf")
+                || msg.contains("apt")
+                || msg.contains("MiKTeX")
+                || msg.contains("mactex")
+        );
     }
 }
 

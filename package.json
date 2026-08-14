@@ -9,8 +9,8 @@
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
-    "tauri": "tauri",
-    "build:linux": "NO_STRIP=true tauri build"
+    "tauri": "NO_STRIP=true APPIMAGE_EXTRACT_AND_RUN=1 tauri",
+    "build:linux": "NO_STRIP=true APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 tauri build"
   },
   "license": "MIT",
   "packageManager": "pnpm@11.8.0",

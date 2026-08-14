@@ -588,13 +588,15 @@ function revealKeyOf(state: EditorState, els: VisualElement[]): string {
   return key;
 }
 
+let revealEnabled = true;
+
 function makeDeco(state: EditorState, els: VisualElement[]): VState {
   const sel = state.selection.ranges;
   const ranges: Range<Decoration>[] = [];
   let revealKey = "";
   for (const el of els) {
     // la selección toca el interior del elemento → se muestra la fuente cruda
-    if (sel.some((r) => r.from < el.to && r.to > el.from)) {
+    if (revealEnabled && sel.some((r) => r.from < el.to && r.to > el.from)) {
       revealKey += el.from + ",";
       continue;
     }
@@ -646,6 +648,7 @@ export const visualField = StateField.define<VState>({
       return { els: mapEls(v.els, tr.changes), deco: v.deco.map(tr.changes), revealKey: v.revealKey };
     }
     if (tr.selection) {
+      if (!revealEnabled) return v;
       // la mayoría de movimientos de cursor no cambian qué está revelado:
       // evitar reconstruir todas las decoraciones
       if (revealKeyOf(tr.state, v.els) === v.revealKey) return v;
@@ -736,12 +739,15 @@ const theme = EditorView.theme({
   },
 });
 
-/** Extensión del modo Visual. `labels` traduce los textos generados. */
+/** Extensión del modo Visual. `labels` traduce los textos generados.
+ *  `reveal: false` = siempre decorado (preview de solo lectura). */
 export function visualLatex(labels?: {
   preamble?: (lines: number) => string;
   references?: () => string;
+  reveal?: boolean;
 }): Extension {
   if (labels?.preamble) preambleLabel = labels.preamble;
   if (labels?.references) referencesLabel = labels.references;
+  revealEnabled = labels?.reveal !== false;
   return [visualField, rescanPlugin, theme];
 }

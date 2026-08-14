@@ -34,6 +34,11 @@ pub fn parse_log(log: &str) -> Vec<Issue> {
 
     for (i, line) in lines.iter().enumerate() {
         if let Some(msg) = line.strip_prefix("! ") {
+            let msg = msg.trim();
+            // el stop no añade información; el error real (p. ej. .sty ausente) ya está
+            if msg.starts_with("Emergency stop") {
+                continue;
+            }
             let lnum = lines[i + 1..(i + 12).min(lines.len())]
                 .iter()
                 .find_map(|l| line_re.captures(l))
@@ -42,7 +47,7 @@ pub fn parse_log(log: &str) -> Vec<Issue> {
                 severity: "error".into(),
                 file: current_file(&stack),
                 line: lnum,
-                message: msg.trim().to_string(),
+                message: msg.to_string(),
             });
         } else if let Some(c) = warn_re.captures(line) {
             let mut msg = c[1].trim().to_string();
@@ -134,6 +139,30 @@ on input line 9.
         assert_eq!(issues[1].file.as_deref(), Some("sections/intro.tex"));
         assert_eq!(issues[2].line, Some(9), "línea en el renglón siguiente por wrap");
         assert_eq!(issues[2].file.as_deref(), Some("main.tex"));
+    }
+
+    #[test]
+    fn parses_missing_sty_sin_emergency_stop() {
+        let log = "\
+(./article_es.tex
+(./Definitions/mdpi.cls
+! LaTeX Error: File `fancyhdr.sty' not found.
+
+Type X to quit or <RETURN> to proceed,
+or enter new name. (Default extension: sty)
+
+Enter file name: 
+! Emergency stop.
+<read *> 
+         
+l.36 \\RequirePackage
+                    {graphicx,epstopdf}
+";
+        let issues = parse_log(log);
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].message.contains("fancyhdr.sty"));
+        assert_eq!(issues[0].line, Some(36));
+        assert_eq!(issues[0].file.as_deref(), Some("Definitions/mdpi.cls"));
     }
 
 }
