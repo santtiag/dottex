@@ -25,7 +25,7 @@
   let doc: PDFDocumentProxy | null = null;
   let task: PDFDocumentLoadingTask | null = null;
   let observer: IntersectionObserver | null = null;
-  let zoom = $state(1.6); // multiplicador sobre "ajustar al ancho"; 160% por defecto
+  let zoom = $state(1); // multiplicador sobre "ajustar al ancho"; 100% por defecto
   let numPages = $state(0);
   let loadSeq = 0;
   let renderSeq = 0; // invalida pinturas en vuelo cuando cambia doc/zoom/ancho

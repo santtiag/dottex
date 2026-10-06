@@ -110,6 +110,9 @@ async fn run_compile(app: &AppHandle, state: &AppState) -> Result<(), String> {
         }
     }
 
+    let stem = state.pdf_stem()?;
+    clear_stale_aux(&build_dir, &stem);
+
     emit_status(
         app,
         CompileStatus {
@@ -127,33 +130,30 @@ async fn run_compile(app: &AppHandle, state: &AppState) -> Result<(), String> {
     };
     emit_log(app, format!("$ {} {}", bin.display(), args.join(" ")));
 
-    let status = spawn_logged(app, &bin, &args, &root).await?;
+    let _status = spawn_logged(app, &bin, &args, &root).await?;
 
-    let stem = state.pdf_stem()?;
     let issues = std::fs::read_to_string(build_dir.join(format!("{stem}.log")))
         .map(|log| parse_log(&log))
         .unwrap_or_default();
 
-    if !status.success() {
-        let message = compile_fail_message(&issues);
-        emit_status(
-            app,
-            CompileStatus {
-                state: "error".into(),
-                message: Some(message),
-                pdf_path: None,
-                issues,
-            },
-        );
-        return Ok(());
-    }
-
+    let pdf_rel = format!(".dottex/build/{stem}.pdf");
+    let has_pdf = build_dir.join(format!("{stem}.pdf")).is_file();
+    let has_err = issues.iter().any(|i| i.severity == "error");
+    let (state, message, pdf_path) = if has_pdf {
+        (
+            if has_err { "error" } else { "ok" },
+            None,
+            Some(pdf_rel),
+        )
+    } else {
+        ("error", Some(compile_fail_message(&issues)), None)
+    };
     emit_status(
         app,
         CompileStatus {
-            state: "ok".into(),
-            message: None,
-            pdf_path: Some(format!(".dottex/build/{stem}.pdf")),
+            state: state.into(),
+            message,
+            pdf_path,
             issues,
         },
     );
@@ -301,6 +301,33 @@ fn classic_args(root_file: &str, build_dir: &Path) -> Vec<String> {
     ]
 }
 
+/// Auxiliares que pdflatex relee al arrancar. Si un compile anterior murió
+/// a mitad (SIGPIPE), quedan truncados y la siguiente pasada explota.
+fn clear_stale_aux(build_dir: &Path, stem: &str) {
+    for ext in ["aux", "out", "toc", "lof", "lot", "fls", "fdb_latexmk"] {
+        let _ = std::fs::remove_file(build_dir.join(format!("{stem}.{ext}")));
+    }
+}
+
+fn log_line(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .trim_end_matches(['\n', '\r'])
+        .to_string()
+}
+
+async fn drain_logged(app: AppHandle, reader: impl tokio::io::AsyncRead + Unpin) {
+    let mut reader = BufReader::new(reader);
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match reader.read_until(b'\n', &mut buf).await {
+            Ok(0) => break,
+            Ok(_) => emit_log(&app, log_line(&buf)),
+            Err(_) => break,
+        }
+    }
+}
+
 fn latexmk_args(engine: &str, root_file: &str, build_dir: &Path) -> Result<Vec<String>, String> {
     let flag = match engine {
         "pdflatex" => "-pdf",
@@ -312,6 +339,7 @@ fn latexmk_args(engine: &str, root_file: &str, build_dir: &Path) -> Result<Vec<S
     };
     Ok(vec![
         flag.into(),
+        "-f".into(),
         "-interaction=nonstopmode".into(),
         "-synctex=1".into(),
         format!("-outdir={}", build_dir.display()),
@@ -338,19 +366,13 @@ async fn spawn_logged(
     if let Some(out) = child.stdout.take() {
         let app = app.clone();
         tasks.push(tokio::spawn(async move {
-            let mut lines = BufReader::new(out).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                emit_log(&app, line);
-            }
+            drain_logged(app, out).await;
         }));
     }
     if let Some(err) = child.stderr.take() {
         let app = app.clone();
         tasks.push(tokio::spawn(async move {
-            let mut lines = BufReader::new(err).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                emit_log(&app, line);
-            }
+            drain_logged(app, err).await;
         }));
     }
     let status = child.wait().await.map_err(|e| e.to_string())?;
@@ -443,6 +465,7 @@ mod tests {
             pdf,
             [
                 "-pdf",
+                "-f",
                 "-interaction=nonstopmode",
                 "-synctex=1",
                 "-outdir=/tmp/build",
@@ -452,6 +475,30 @@ mod tests {
         assert_eq!(latexmk_args("xelatex", "a.tex", d).unwrap()[0], "-xelatex");
         assert_eq!(latexmk_args("lualatex", "a.tex", d).unwrap()[0], "-lualatex");
         assert!(latexmk_args("tectonic", "a.tex", d).is_err());
+    }
+
+    #[test]
+    fn log_line_latin1_no_revienta() {
+        assert_eq!(log_line(b"ok\n"), "ok");
+        assert_eq!(log_line(b"ok\r\n"), "ok");
+        // 0xE9 = é in Latin-1; UTF-8 would reject the line and close the pipe
+        let s = log_line(&[b'c', b'a', 0xE9, b'\n']);
+        assert!(s.starts_with("ca"));
+        assert!(!s.ends_with('\n'));
+    }
+
+    #[test]
+    fn clear_stale_aux_borra_aux_no_pdf() {
+        let d = std::env::temp_dir().join(format!("dottex-aux-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        for name in ["main.aux", "main.out", "main.pdf"] {
+            std::fs::write(d.join(name), b"x").unwrap();
+        }
+        clear_stale_aux(&d, "main");
+        assert!(!d.join("main.aux").exists());
+        assert!(!d.join("main.out").exists());
+        assert!(d.join("main.pdf").is_file());
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
