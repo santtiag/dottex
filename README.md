@@ -21,12 +21,12 @@ side by side. No cloud, no account, no clutter in your project folder.
   KaTeX (`$…$`, `$$…$$`, `\[…\]`, `equation`/`align`/`gather`), inline
   `\includegraphics` images, italic captions. Setup commands (preamble,
   `\maketitle`, `\date`, `\label`, `\begin{document}`…) collapse behind a
-  clickable `⚙ n` pill and expand when the cursor is inside them.
+  clickable pill and expand when the cursor is inside them.
 - **Compile with Tectonic** (`Ctrl+Enter` or the ▶ button): automatic root
   file detection (`\documentclass`, `% !TEX root`, multi-file projects via
   `\input`/`\include`), with a "Set as root" option in the tree context menu.
 - **Live preview**: recompiles automatically ~450ms after you stop typing
-  (toggle in the status bar), with typing / compiling / ready / error states.
+  (toggle in Settings → Compilation), with typing / compiling / ready / error states.
 - **Problems panel**: errors and warnings parsed from the log, with file and
   line; click to jump to the offending line. Raw log available.
 - **Bidirectional SyncTeX**: `Ctrl/Cmd+click` in the editor jumps to that
@@ -44,7 +44,7 @@ side by side. No cloud, no account, no clutter in your project folder.
 - **Theme**: automatic / light / dark, with a wide selection of editor
   color schemes.
 - **Integrated PDF viewer** (pdf.js): zoom, lazy per-page rendering, keeps
-  scroll position across recompiles.
+  scroll position across recompiles; pixel-exact rendering and a dark-paper mode.
 - **Clean project folder**: everything generated (`.aux`, `.log`,
   `.synctex.gz`, the PDF) lives in `.dottex/`, hidden in the tree. Export the
   final PDF with one click; a "Clean artifacts" action is included.
@@ -58,19 +58,38 @@ app's data directory. Tectonic then fetches and caches the LaTeX packages
 your document needs; everything works offline afterward.
 
 To manage it yourself, install Tectonic via your package manager
-(`dnf install tectonic`, `brew install tectonic`, `cargo install tectonic`…)
+(`pacman -S tectonic`, `dnf install tectonic`, `brew install tectonic`…)
 and dottex will use that instead.
 
 Templates that require pdfLaTeX (MDPI, some journals) will fail under Tectonic.
 In **Settings → Compilation**, switch the project engine to pdfLaTeX, XeLaTeX,
 or LuaLaTeX. Those use `latexmk` from a system TeX Live or MiKTeX install
-(e.g. `sudo dnf install texlive-scheme-medium texlive-collection-latexextra texlive-collection-fontsrecommended latexmk`). The choice
+(Arch: `sudo pacman -S texlive-latex texlive-latexrecommended texlive-latexextra texlive-fontsrecommended texlive-binextra`;
+Fedora: `sudo dnf install texlive-scheme-medium texlive-collection-latexextra texlive-collection-fontsrecommended latexmk`). The choice
 is stored per project in `.dottex/config.json`.
 
 ## Installation
 
 Prebuilt installers for Linux, macOS, and Windows are published on the
 [Releases](https://github.com/santtiag/dottex/releases) page.
+
+### Arch Linux / CachyOS
+
+A `PKGBUILD` that builds a native package from your checkout lives in
+`packaging/arch/`:
+
+```bash
+sudo pacman -S --needed base-devel rust nodejs pnpm webkit2gtk-4.1
+git clone https://github.com/santtiag/dottex && cd dottex/packaging/arch
+makepkg -si
+```
+
+If your `pnpm` comes from corepack or npm rather than pacman, leave it out of
+the first command and build with `makepkg -di` instead.
+
+This installs `/usr/bin/dottex`, the launcher entry and the icons. `tectonic`
+is an optional dependency: install it with pacman, or let dottex download it
+on first compile.
 
 ## Building from source
 
@@ -79,6 +98,8 @@ Requires [Rust](https://rustup.rs) (stable), Node.js ≥ 20, and pnpm.
 ### Linux
 
 ```bash
+# Arch / CachyOS
+sudo pacman -S --needed base-devel rust webkit2gtk-4.1 librsvg
 # Fedora
 sudo dnf install webkit2gtk4.1-devel gtk3-devel librsvg2-devel
 # Debian/Ubuntu
@@ -87,6 +108,7 @@ sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev build-essential
 pnpm install
 pnpm tauri dev      # development
 pnpm tauri build    # .deb, .rpm, AppImage
+pnpm build:arch     # just the binary (src-tauri/target/release/dottex)
 # NO_STRIP / APPIMAGE_EXTRACT_AND_RUN van en el script `tauri` (linuxdeploy
 # no puede strippear ELF modernos en Fedora).
 ```

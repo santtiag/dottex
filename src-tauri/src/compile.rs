@@ -34,7 +34,7 @@ fn emit_status(app: &AppHandle, status: CompileStatus) {
     let _ = app.emit("compile:status", status);
 }
 
-fn emit_log(app: &AppHandle, line: impl Into<String>) {
+pub(crate) fn emit_log(app: &AppHandle, line: impl Into<String>) {
     let _ = app.emit("compile:log", line.into());
 }
 
@@ -213,6 +213,8 @@ fn texlive_install_hint() -> &'static str {
         "instala MiKTeX o TeX Live completo"
     } else if cfg!(target_os = "macos") {
         "brew install --cask mactex-no-gui"
+    } else if Path::new("/usr/bin/pacman").is_file() {
+        "sudo pacman -S texlive-latex texlive-latexrecommended texlive-latexextra texlive-fontsrecommended texlive-binextra"
     } else if Path::new("/usr/bin/dnf").is_file() {
         "sudo dnf install texlive-scheme-medium texlive-collection-latexextra texlive-collection-fontsrecommended latexmk"
     } else {
@@ -408,7 +410,7 @@ fn sha256_file(path: &Path) -> Result<String, String> {
         .ok_or_else(|| "Salida de checksum irreconocible".into())
 }
 
-fn find_on_path(name: &str) -> Option<PathBuf> {
+pub(crate) fn find_on_path(name: &str) -> Option<PathBuf> {
     let bin = if cfg!(windows) {
         format!("{name}.exe")
     } else {
@@ -521,11 +523,13 @@ mod tests {
             file: Some("Definitions/mdpi.cls".into()),
             line: Some(36),
             message: "LaTeX Error: File `fancyhdr.sty' not found.".into(),
+            context: None,
         }];
         let msg = compile_fail_message(&issues);
         assert!(msg.contains("fancyhdr.sty"));
         assert!(
-            msg.contains("dnf")
+            msg.contains("pacman")
+                || msg.contains("dnf")
                 || msg.contains("apt")
                 || msg.contains("MiKTeX")
                 || msg.contains("mactex")
@@ -545,13 +549,26 @@ fn download_tectonic(app: &AppHandle, dest: &Path) -> Result<PathBuf, String> {
         "https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%40{v}/tectonic-{v}-{asset}",
         v = TECTONIC_VERSION
     );
-
-    let bin_dir = dest.parent().unwrap();
-    std::fs::create_dir_all(bin_dir).map_err(|e| e.to_string())?;
-    let archive = bin_dir.join(&asset);
-
     emit_log(app, format!("Tectonic no encontrado; descargando {TECTONIC_VERSION}..."));
     emit_log(app, url.clone());
+    fetch_binary("Tectonic", &url, &asset, TECTONIC_SHA256, dest)?;
+    emit_log(app, format!("Tectonic instalado en {}", dest.display()));
+    Ok(dest.to_path_buf())
+}
+
+/// Descarga `url` junto a `dest`, verifica su SHA-256 contra `sums` (por
+/// nombre de asset) y lo extrae; `dest` es el binario que debe quedar.
+/// Compartido por Tectonic y texlab.
+pub(crate) fn fetch_binary(
+    what: &str,
+    url: &str,
+    asset: &str,
+    sums: &[(&str, &str)],
+    dest: &Path,
+) -> Result<(), String> {
+    let bin_dir = dest.parent().unwrap();
+    std::fs::create_dir_all(bin_dir).map_err(|e| e.to_string())?;
+    let archive = bin_dir.join(asset);
 
     // ponytail: curl + tar del sistema (vienen con Linux, macOS y Windows 10+)
     // en vez de reqwest + flate2/zip; si algún día falla en una plataforma,
@@ -567,10 +584,10 @@ fn download_tectonic(app: &AppHandle, dest: &Path) -> Result<PathBuf, String> {
             Err(format!("{cmd} falló: {}", String::from_utf8_lossy(&out.stderr)))
         }
     };
-    run("curl", &["-fsSL", &url, "-o", &archive.to_string_lossy()]).map_err(|e| {
-        format!("No se pudo descargar Tectonic (¿sin conexión?). Instálalo manualmente y reintenta. {e}")
+    run("curl", &["-fsSL", url, "-o", &archive.to_string_lossy()]).map_err(|e| {
+        format!("No se pudo descargar {what} (¿sin conexión?). Instálalo manualmente y reintenta. {e}")
     })?;
-    let expected = TECTONIC_SHA256
+    let expected = sums
         .iter()
         .find(|(a, _)| *a == asset)
         .map(|(_, h)| *h)
@@ -579,7 +596,7 @@ fn download_tectonic(app: &AppHandle, dest: &Path) -> Result<PathBuf, String> {
     if actual != expected {
         let _ = std::fs::remove_file(&archive);
         return Err(format!(
-            "El checksum de Tectonic no coincide (esperado {expected}, obtenido {actual}); \
+            "El checksum de {what} no coincide (esperado {expected}, obtenido {actual}); \
              descarga corrupta o manipulada. Instálalo manualmente y reintenta."
         ));
     }
@@ -593,8 +610,7 @@ fn download_tectonic(app: &AppHandle, dest: &Path) -> Result<PathBuf, String> {
             .map_err(|e| e.to_string())?;
     }
     if !dest.is_file() {
-        return Err("La descarga de Tectonic no produjo el binario esperado".into());
+        return Err(format!("La descarga de {what} no produjo el binario esperado"));
     }
-    emit_log(app, format!("Tectonic instalado en {}", dest.display()));
-    Ok(dest.to_path_buf())
+    Ok(())
 }

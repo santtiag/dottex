@@ -52,11 +52,54 @@ button {
   border: 1px solid transparent;
   border-radius: 6px;
   padding: 3px 8px;
-  cursor: pointer;
+  cursor: var(--cur-pointer, pointer);
 }
 
 button:hover {
   background: var(--hover);
+}
+
+/* ---- cursores propios ----
+   Las variables --cur-* las pone +page.svelte desde cursors.ts; el segundo valor
+   de cada var() es el cursor que había antes, para cuando la preferencia está apagada. */
+html {
+  cursor: var(--cur-arrow, auto);
+}
+select {
+  cursor: var(--cur-pointer, auto);
+}
+input:not([type="checkbox"]),
+.cm-content[contenteditable="true"] {
+  cursor: var(--cur-text, auto);
+}
+.wrap.visual .cm-content[contenteditable="true"] {
+  cursor: var(--cur-visual, auto);
+}
+.dialog {
+  cursor: var(--cur-settings, auto);
+}
+
+/* ---- anillo de clic (decorativo; lo crea +page.svelte) ---- */
+.click-ring {
+  position: fixed;
+  z-index: 1000;
+  width: 28px;
+  height: 28px;
+  margin: -14px 0 0 -14px;
+  border: 1.5px solid var(--accent);
+  border-radius: 50%;
+  pointer-events: none;
+  animation: click-ring 0.3s ease-out forwards;
+}
+@keyframes click-ring {
+  from {
+    transform: scale(0.3);
+    opacity: 0.6;
+  }
+  to {
+    transform: scale(1);
+    opacity: 0;
+  }
 }
 
 input {

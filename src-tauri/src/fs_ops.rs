@@ -223,14 +223,6 @@ fn unique_trash_id(trash: &std::path::Path, millis: u64, name: &str) -> String {
     id
 }
 
-/// Un id de papelera es un nombre plano, nunca una ruta.
-fn check_trash_id(id: &str) -> Result<(), String> {
-    if id.is_empty() || id.contains('/') || id.contains('\\') || id == "." || id == ".." {
-        return Err("Id de papelera inválido".into());
-    }
-    Ok(())
-}
-
 #[tauri::command]
 pub fn list_trash(state: State<AppState>) -> Result<Vec<TrashEntry>, String> {
     let trash = state.trash_dir()?;
@@ -262,7 +254,7 @@ pub fn list_trash(state: State<AppState>) -> Result<Vec<TrashEntry>, String> {
 
 #[tauri::command]
 pub fn restore_trash(state: State<AppState>, id: String) -> Result<(), String> {
-    check_trash_id(&id)?;
+    crate::check_plain_name(&id)?;
     let trash = state.trash_dir()?;
     let item = trash.join(&id);
     if !item.exists() {
@@ -290,7 +282,7 @@ pub fn restore_trash(state: State<AppState>, id: String) -> Result<(), String> {
 /// Borrado permanente de una entrada de la papelera.
 #[tauri::command]
 pub fn delete_trash_item(state: State<AppState>, id: String) -> Result<(), String> {
-    check_trash_id(&id)?;
+    crate::check_plain_name(&id)?;
     let trash = state.trash_dir()?;
     let item = trash.join(&id);
     if item.is_dir() {

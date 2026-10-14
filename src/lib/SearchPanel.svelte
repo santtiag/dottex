@@ -141,7 +141,7 @@
     align-items: center;
     gap: 3px;
     color: var(--fg-dim);
-    cursor: pointer;
+    cursor: var(--cur-pointer, pointer);
     font-family: ui-monospace, monospace;
   }
   .spacer {

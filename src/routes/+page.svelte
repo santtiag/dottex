@@ -2,8 +2,28 @@
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import {
+    ChevronDown,
+    Circle,
+    CircleCheck,
+    CircleX,
+    Download,
+    Eraser,
+    LoaderCircle,
+    Minus,
+    PanelLeft,
+    PanelRight,
+    PencilLine,
+    Play,
+    ScrollText,
+    Settings as SettingsIcon,
+    Square,
+    TriangleAlert,
+    X,
+    setLucideProps,
+  } from "@lucide/svelte";
   import type { CompileStatus, RecentProject } from "$lib/ipc";
-  import { cleanArtifacts, getRecentProjects } from "$lib/ipc";
+  import { cleanArtifacts, getRecentProjects, saveAsTemplate } from "$lib/ipc";
   import {
     app,
     autoCompile,
@@ -13,6 +33,7 @@
     onCompileStatus,
     openProject,
     pickAndOpenProject,
+    problems,
     refreshActiveFromDisk,
     reloadTree,
     requestCompile,
@@ -25,6 +46,7 @@
   } from "$lib/state.svelte";
   import { invalidateCompletions, loadSnippets } from "$lib/latexComplete";
   import { clearImgCache } from "$lib/visualLatex";
+  import { cursorVars } from "$lib/cursors";
   import { t } from "$lib/i18n.svelte";
   import Editor from "$lib/Editor.svelte";
   import FileTree from "$lib/FileTree.svelte";
@@ -36,6 +58,9 @@
   import Welcome from "$lib/Welcome.svelte";
   import "../app.css";
 
+  // estilo único de iconos para toda la app
+  setLucideProps({ size: 16, strokeWidth: 1.75 });
+
   const win = getCurrentWindow();
   // En macOS los botones nativos (traffic lights) se superponen a la barra.
   const isMac = navigator.userAgent.includes("Macintosh");
@@ -45,8 +70,19 @@
   let sidebarOpen = $state(true);
   let pdfOpen = $state(true);
   let sidebarTab = $state<"files" | "outline" | "search" | "issues">("files");
-  let sidebarW = $state(230);
-  let pdfW = $state(480);
+  let sidebarW = $state(244);
+  // Parte del espacio editor+PDF que ocupa el panel derecho. Una fracción y no
+  // píxeles: el reparto se conserva al pasar de media pantalla a completa.
+  let pdfFrac = $state(0.5);
+  // Anchos efectivos: en una ventana estrecha (media pantalla en un tiling
+  // WM) los paneles ceden sitio para que el editor no quede aplastado.
+  let winW = $state(1280);
+  const sideW = $derived(Math.min(sidebarW, Math.round(winW * 0.28)));
+  // lo que se reparten el editor y el panel derecho
+  const splitW = $derived(winW - (sidebarOpen ? sideW + 4 : 0) - 4);
+  const MIN_PANE = 160;
+  const fitRight = (w: number) => Math.max(MIN_PANE, Math.min(splitW - MIN_PANE, w));
+  const rightW = $derived(Math.round(fitRight(splitW * pdfFrac)));
   let logEl: HTMLDivElement | undefined = $state();
   let settingsOpen = $state(false);
   // layout de paneles .tex: código|visual a la izquierda, pdf|visual-lectura a la derecha
@@ -70,8 +106,28 @@
   let projMenuOpen = $state(false);
   let recents = $state<RecentProject[]>([]);
 
+  // «Guardar como plantilla…»: null = entrada de menú; texto = campo del nombre
+  let tplName = $state<string | null>(null);
+
+  async function saveTemplate(e: SubmitEvent) {
+    e.preventDefault();
+    const name = tplName?.trim();
+    if (!name) return;
+    try {
+      // la plantilla se copia del disco: que incluya lo que hay en pantalla
+      const text = editorRef?.getText();
+      if (app.dirty && text !== undefined) await saveActive(text);
+      await saveAsTemplate(name);
+      toast(t("templateSaved", name));
+    } catch (err) {
+      toast(String(err));
+    }
+    projMenuOpen = false;
+  }
+
   async function toggleProjMenu() {
     projMenuOpen = !projMenuOpen;
+    tplName = null;
     if (projMenuOpen)
       recents = (await getRecentProjects()).filter((r) => r.path !== app.project?.path);
   }
@@ -81,6 +137,11 @@
     sysDark = mq.matches;
     mq.addEventListener("change", (e) => (sysDark = e.matches));
     loadSnippets();
+
+    // la interfaz ya está montada debajo: fundir y retirar el skeleton de arranque
+    const boot = document.getElementById("boot");
+    boot?.classList.add("out");
+    setTimeout(() => boot?.remove(), 200);
 
     // las líneas del log llegan en ráfagas: acumular y volcar una vez por frame
     let logBuf: string[] = [];
@@ -110,6 +171,44 @@
     return () => unlisten.then((fns) => fns.forEach((f) => f()));
   });
 
+  // Cursores propios: variables en <html> para que alcancen también a los
+  // tooltips que CodeMirror cuelga del body.
+  let cursorNames: string[] = [];
+  $effect(() => {
+    const root = document.documentElement.style;
+    if (!settings.customCursor) {
+      for (const name of cursorNames) root.removeProperty(name);
+      return;
+    }
+    let stale = false; // el tema cambió antes de que terminara de dibujarse
+    cursorVars(dark).then((vars) => {
+      if (stale) return;
+      cursorNames = Object.keys(vars);
+      for (const [name, value] of Object.entries(vars)) root.setProperty(name, value);
+    });
+    return () => {
+      stale = true;
+    };
+  });
+
+  let shellEl: HTMLDivElement;
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  /** Anillo sutil en el punto del clic; puramente decorativo. */
+  function clickRing(e: PointerEvent) {
+    if (!settings.clickFx || e.button !== 0 || reduceMotion.matches) return;
+    const ring = document.createElement("span");
+    ring.className = "click-ring";
+    ring.style.left = `${e.clientX}px`;
+    ring.style.top = `${e.clientY}px`;
+    ring.onanimationend = () => ring.remove();
+    shellEl.append(ring); // dentro del shell: hereda el acento del tema
+  }
+
+  const focusSelect = (el: HTMLInputElement) => {
+    el.focus();
+    el.select();
+  };
+
   /** Ctrl+Enter: guarda, fija el archivo activo como raíz si no hay una y compila. */
   async function compileActive(text?: string) {
     if (!app.project) return;
@@ -138,11 +237,13 @@
   function dragResize(e: MouseEvent, side: "left" | "right") {
     e.preventDefault();
     const startX = e.clientX;
-    const start = side === "left" ? sidebarW : pdfW;
+    // Se parte del ancho que se ve, no del guardado: si la ventana lo tenía
+    // recortado, el divisor tardaba en responder o no se movía.
+    const start = side === "left" ? sideW : rightW;
     const move = (ev: MouseEvent) => {
       const d = ev.clientX - startX;
       if (side === "left") sidebarW = Math.max(140, Math.min(500, start + d));
-      else pdfW = Math.max(240, Math.min(window.innerWidth - 400, start - d));
+      else pdfFrac = fitRight(start - d) / splitW;
     };
     const up = () => {
       window.removeEventListener("mousemove", move);
@@ -161,8 +262,14 @@
     }
   }
 
-  const errorCount = $derived(app.issues.filter((i) => i.severity === "error").length);
-  const warnCount = $derived(app.issues.length - errorCount);
+  const issueCount = $derived(problems().length);
+  const errorCount = $derived(problems().filter((i) => i.severity === "error").length);
+  const warnCount = $derived(issueCount - errorCount);
+  const StatusIcon = $derived(
+    app.typing
+      ? PencilLine
+      : { idle: Circle, compiling: LoaderCircle, ok: CircleCheck, error: CircleX }[app.compileState],
+  );
   const statusText = $derived(
     app.typing
       ? t("statusTyping")
@@ -210,17 +317,17 @@
   });
 </script>
 
-<svelte:window onkeydown={onKeydown} />
+<svelte:window onkeydown={onKeydown} onpointerdown={clickRing} bind:innerWidth={winW} />
 <svelte:head><title>{app.project ? `${app.project.name} — dottex` : "dottex"}</title></svelte:head>
 
-<div class="shell" class:dark>
+<div class="shell" class:dark bind:this={shellEl}>
   <header class="titlebar" data-tauri-drag-region>
     {#if isMac}<span class="mac-pad"></span>{/if}
     {#if app.project}
-      <button class="tb" title={t("toggleSidebar")} onclick={() => (sidebarOpen = !sidebarOpen)}>☰</button>
+      <button class="tb" title={t("toggleSidebar")} aria-label={t("toggleSidebar")} onclick={() => (sidebarOpen = !sidebarOpen)}><PanelLeft /></button>
       <div class="projwrap">
         <button class="tb proj" title={t("switchProject")} onclick={toggleProjMenu}>
-          {app.project.name} <span class="caret">▾</span>
+          <span class="pname">{app.project.name}</span><ChevronDown size={13} />
         </button>
         {#if projMenuOpen}
           <button class="menu-backdrop" aria-label={t("close")} onclick={() => (projMenuOpen = false)}></button>
@@ -248,6 +355,14 @@
               {/each}
             {/if}
             <div class="msep"></div>
+            {#if tplName === null}
+              <button onclick={() => (tplName = app.project?.name ?? "")}>{t("saveAsTemplate")}</button>
+            {:else}
+              <form class="mform" onsubmit={saveTemplate}>
+                <input bind:value={tplName} placeholder={t("templateName")} use:focusSelect />
+                <button type="submit">{t("save")}</button>
+              </form>
+            {/if}
             <button
               onclick={() => {
                 projMenuOpen = false;
@@ -260,7 +375,7 @@
         {/if}
       </div>
       <span class="file" data-tauri-drag-region>
-        {app.active?.path ?? ""}{#if app.dirty}&nbsp;<span class="dot" title={t("unsaved")}>●</span>{/if}
+        {app.active?.path ?? ""}{#if app.dirty}&nbsp;<span class="dot" title={t("unsaved")}></span>{/if}
       </span>
     {:else}
       <span class="appname" data-tauri-drag-region>dottex</span>
@@ -273,10 +388,14 @@
         disabled={app.compileState === "compiling"}
         title={t("compileTitle")}
       >
-        {app.compileState === "compiling" ? t("compiling") : `▶ ${t("compile")}`}
+        {#if app.compileState === "compiling"}
+          <span class="spin"><LoaderCircle size={14} /></span>{t("compiling")}
+        {:else}
+          <Play size={14} />{t("compile")}
+        {/if}
       </button>
-      <button class="tb" onclick={exportPdf} disabled={!app.pdf} title={t("exportPdfTitle")}>⬇ PDF</button>
-      <button class="tb" title={t("togglePdf")} onclick={() => (pdfOpen = !pdfOpen)}>◫</button>
+      <button class="tb" onclick={exportPdf} disabled={!app.pdf} title={t("exportPdfTitle")}><Download />PDF</button>
+      <button class="tb" title={t("togglePdf")} aria-label={t("togglePdf")} onclick={() => (pdfOpen = !pdfOpen)}><PanelRight /></button>
     {/if}
     <button
       class="tb"
@@ -284,21 +403,18 @@
       aria-label={t("settings")}
       onclick={() => (settingsOpen = true)}
     >
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
-        <circle cx="12" cy="12" r="3" />
-      </svg>
+      <SettingsIcon />
     </button>
     {#if !isMac}
       <div class="winctl">
         <button title={t("minimize")} onclick={() => win.minimize()} aria-label={t("minimize")}>
-          <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 5h8" stroke="currentColor" stroke-width="1.2" /></svg>
+          <Minus size={14} />
         </button>
         <button title={t("maximize")} onclick={() => win.toggleMaximize()} aria-label={t("maximize")}>
-          <svg width="10" height="10" viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1.2" rx="1" /></svg>
+          <Square size={12} />
         </button>
         <button class="close" title={t("close")} onclick={() => win.close()} aria-label={t("close")}>
-          <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1.5 1.5l7 7M8.5 1.5l-7 7" stroke="currentColor" stroke-width="1.2" /></svg>
+          <X size={14} />
         </button>
       </div>
     {/if}
@@ -309,8 +425,8 @@
   {:else}
     <main
       class="panes"
-      style:grid-template-columns="{sidebarOpen ? `${sidebarW}px 4px` : ""} 1fr {pdfOpen
-        ? `4px ${pdfW}px`
+      style:grid-template-columns="{sidebarOpen ? `${sideW}px 4px` : ""} 1fr {pdfOpen
+        ? `4px ${rightW}px`
         : ""}"
     >
       {#if sidebarOpen}
@@ -327,7 +443,7 @@
             </button>
             <button class:active={sidebarTab === "issues"} onclick={() => (sidebarTab = "issues")}>
               {t("tabIssues")}
-              {#if app.issues.length}<span class="count" class:err={errorCount}>{app.issues.length}</span>{/if}
+              {#if issueCount}<span class="count" class:err={errorCount}>{issueCount}</span>{/if}
             </button>
           </nav>
           {#if sidebarTab === "files"}
@@ -370,13 +486,13 @@
             path={app.active.path}
             content={app.active.content}
             {dark}
-            auto={app.auto}
+            auto={settings.autoCompile}
             visual={layout === "visual-pdf" && isTex}
             goto={app.goto}
             onSave={saveActive}
             onDirty={() => {
               app.dirty = true;
-              if (app.auto) app.typing = true;
+              if (settings.autoCompile) app.typing = true;
             }}
             onIdle={autoCompile}
             onCompile={compileActive}
@@ -389,7 +505,7 @@
             <div class="media"><img src={url} alt={app.active.path} /></div>
           {/await}
         {:else if app.active.kind === "pdf"}
-          <PdfViewer source={{ path: app.active.path, version: 0 }} />
+          <PdfViewer source={{ path: app.active.path, version: 0 }} {dark} />
         {:else}
           <p class="empty">{t("unsupportedFormat", app.active.path)}</p>
         {/if}
@@ -415,7 +531,7 @@
             {#if layout === "code-visual" && isTex && app.active?.kind === "text"}
               <Editor path={app.active.path} content={liveTex} {dark} visual readonly />
             {:else}
-              <PdfViewer source={app.pdf} target={app.pdfTarget} onSyncClick={syncFromPdf} />
+              <PdfViewer source={app.pdf} target={app.pdfTarget} {dark} onSyncClick={syncFromPdf} />
             {/if}
           </div>
         </aside>
@@ -428,8 +544,11 @@
     {/if}
 
     <footer class="status">
-      <span class="state {app.compileState}" class:typing={app.typing}>● {statusText}</span>
-      {#if app.issues.length}
+      <span class="state {app.compileState}" class:typing={app.typing}>
+        <span class:spin={app.compileState === "compiling" && !app.typing}><StatusIcon size={13} /></span>
+        {statusText}
+      </span>
+      {#if issueCount}
         <button
           class="issues-btn"
           onclick={() => {
@@ -437,20 +556,40 @@
             sidebarTab = "issues";
           }}
         >
-          {#if errorCount}<span class="e">✕ {errorCount}</span>{/if}
-          {#if warnCount}<span class="w">⚠ {warnCount}</span>{/if}
+          {#if errorCount}<span class="e"><CircleX size={13} />{errorCount}</span>{/if}
+          {#if warnCount}<span class="w"><TriangleAlert size={13} />{warnCount}</span>{/if}
         </button>
       {/if}
       {#if app.project.root_file}<span class="rootfile">{t("rootPrefix", app.project.root_file)}</span>{/if}
       <span class="spacer"></span>
-      <label class="autolbl" title={t("autoPreviewTitle")}>
-        <input type="checkbox" bind:checked={app.auto} /> {t("autoPreview")}
-      </label>
-      <button onclick={clean}>{t("cleanArtifacts")}</button>
-      <button onclick={() => (app.showLog = !app.showLog)}>
-        {app.showLog ? t("hideLog") : t("showLog")}
+      <button class="sbtn" onclick={clean} title={t("cleanArtifacts")} aria-label={t("cleanArtifacts")}>
+        <Eraser size={14} />
+      </button>
+      <button
+        class="sbtn"
+        class:on={app.showLog}
+        onclick={() => (app.showLog = !app.showLog)}
+        title={app.showLog ? t("hideLog") : t("showLog")}
+        aria-label={app.showLog ? t("hideLog") : t("showLog")}
+      >
+        <ScrollText size={14} />
       </button>
     </footer>
+  {/if}
+
+  {#if app.opening}
+    <!-- silueta mientras se escanea la carpeta; va encima para no desmontar nada -->
+    <div class="opening" aria-hidden="true">
+      <div class="o-side">
+        {#each [70, 55, 82, 48, 64, 40] as w (w)}<div class="sk" style:width="{w}%"></div>{/each}
+      </div>
+      <div class="o-center">
+        {#each [42, 88, 76, 93, 61, 0, 84, 70, 90, 35, 0, 79, 66] as w, i (i)}
+          <div class={w ? "sk" : ""} style:width="{w}%"></div>
+        {/each}
+      </div>
+      <div class="o-pdf"><div class="sk"></div></div>
+    </div>
   {/if}
 
   {#if settingsOpen}
@@ -470,6 +609,53 @@
     background: var(--bg);
     color: var(--fg);
     border: 1px solid var(--border); /* contorno de ventana sin decoraciones */
+    position: relative; /* ancla de .opening */
+  }
+  /* ---- silueta al abrir un proyecto ---- */
+  .opening {
+    position: absolute;
+    inset: 40px 0 0; /* bajo la barra de título */
+    z-index: 50;
+    display: grid;
+    grid-template-columns: 28% 1fr 40%;
+    background: var(--bg);
+    /* 120 ms de retardo: una carpeta pequeña abre antes y no llega a verse */
+    animation: opening-in 0.15s ease 0.12s both;
+  }
+  @keyframes opening-in {
+    from {
+      opacity: 0;
+    }
+  }
+  .opening > div {
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .opening .sk,
+  .opening .o-center > div {
+    height: 12px;
+    flex: none;
+  }
+  .o-side {
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+  }
+  /* sobre el panel, el degradado normal de .sk (panel/hover) no se distingue */
+  .o-side .sk {
+    background-image: linear-gradient(90deg, var(--hover) 25%, var(--border) 50%, var(--hover) 75%);
+  }
+  .o-pdf {
+    background: var(--pdf-bg);
+    border-left: 1px solid var(--border);
+    align-items: center;
+  }
+  .o-pdf .sk {
+    width: 80%;
+    height: auto;
+    aspect-ratio: 1 / 1.414; /* A4 */
+    border-radius: 2px;
   }
   /* ---- barra de título integrada ---- */
   .titlebar {
@@ -493,25 +679,34 @@
   }
   .tb {
     flex: none;
-  }
-  .tb svg {
-    display: block;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 26px;
   }
   .proj {
     font-weight: 600;
     max-width: 220px;
+  }
+  .pname {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* giro del indicador de compilación */
+  .spin {
+    display: grid;
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
   /* menú del proyecto */
   .projwrap {
     position: relative;
     flex: none;
-  }
-  .caret {
-    font-size: 9px;
-    opacity: 0.7;
   }
   .menu-backdrop {
     position: fixed;
@@ -563,6 +758,16 @@
     white-space: nowrap;
     max-width: 350px;
   }
+  .mform {
+    display: flex;
+    gap: 6px;
+    padding: 4px 6px;
+  }
+  .mform input {
+    flex: 1;
+    min-width: 0;
+    padding: 4px 8px;
+  }
   .msep {
     height: 1px;
     background: var(--border);
@@ -576,7 +781,11 @@
     white-space: nowrap;
   }
   .dot {
-    color: var(--accent);
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
   }
   .spacer {
     flex: 1;
@@ -590,6 +799,13 @@
     border-radius: 6px;
     font-weight: 600;
     flex: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .compile:hover {
+    background: var(--accent);
+    filter: brightness(1.08);
   }
   .compile:disabled {
     opacity: 0.6;
@@ -637,9 +853,10 @@
     border-bottom: 1px solid var(--border);
   }
   .tabs button {
-    flex: 1;
+    flex: 1 1 auto;
+    white-space: nowrap;
     border-radius: 0;
-    padding: 6px 4px;
+    padding: 6px 2px;
     font-size: 12px;
     color: var(--fg-dim);
     border-bottom: 2px solid transparent;
@@ -786,48 +1003,24 @@
   .rootfile {
     color: var(--fg-dim);
   }
-  .autolbl {
+  .state,
+  .issues-btn,
+  .issues-btn span {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 5px;
+  }
+  .sbtn {
+    display: grid;
+    padding: 3px 6px;
     color: var(--fg-dim);
-    cursor: pointer;
   }
-  /* interruptor (toggle) a partir del checkbox nativo, como en Configuración */
-  .autolbl input {
-    appearance: none;
-    -webkit-appearance: none;
-    position: relative;
-    width: 28px;
-    height: 16px;
-    border-radius: 999px;
-    background: var(--border);
-    cursor: pointer;
-    flex: none;
-    margin: 0;
-    transition: background 0.15s ease;
+  .sbtn:hover,
+  .sbtn.on {
+    color: var(--fg);
   }
-  .autolbl input::after {
-    content: "";
-    position: absolute;
-    top: 2px;
-    left: 2px;
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background: #fff;
-    box-shadow: 0 1px 2px rgb(0 0 0 / 0.3);
-    transition: transform 0.15s ease;
-  }
-  .autolbl input:checked {
-    background: var(--accent);
-  }
-  .autolbl input:checked::after {
-    transform: translateX(12px);
-  }
-  .autolbl input:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
+  .sbtn.on {
+    background: var(--hover);
   }
   .toast {
     position: fixed;

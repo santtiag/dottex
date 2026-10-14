@@ -1,5 +1,7 @@
 import type { Extension } from "@codemirror/state";
-import { oneDark } from "@codemirror/theme-one-dark";
+import { EditorView } from "@codemirror/view";
+import { syntaxHighlighting } from "@codemirror/language";
+import { oneDark, oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import {
   amy,
   ayuLight,
@@ -23,10 +25,26 @@ export interface EditorTheme {
   ext: Extension;
 }
 
+// Tema "light": sin fondo propio, el editor toma los colores de la app. El resto
+// también tiene que seguirla (canalón, selección, cursor, línea activa, sintaxis):
+// si no, CodeMirror los deja con su versión clara y en modo oscuro el canalón de
+// números queda en blanco.
+const appGutters = EditorView.theme({
+  ".cm-gutters": {
+    backgroundColor: "var(--panel)",
+    color: "var(--fg-dim)",
+    borderRightColor: "var(--border)",
+  },
+});
+const appColors = (dark: boolean): Extension =>
+  dark
+    ? [appGutters, EditorView.darkTheme.of(true), syntaxHighlighting(oneDarkHighlightStyle)]
+    : appGutters;
+
 /// Los ids "light" y "dark" se conservan por compatibilidad con
 /// configuraciones ya guardadas en localStorage.
 export const editorThemes: Record<string, EditorTheme> = {
-  light: { label: "Default Light", dark: false, ext: [] },
+  light: { label: "App", dark: false, ext: appColors(false) },
   ayuLight: { label: "Ayu Light", dark: false, ext: ayuLight },
   clouds: { label: "Clouds", dark: false, ext: clouds },
   espresso: { label: "Espresso", dark: false, ext: espresso },
@@ -46,6 +64,6 @@ export const editorThemes: Record<string, EditorTheme> = {
 
 /** Theme efectivo: "auto" sigue el tema general de la app. */
 export function resolveTheme(id: string, appDark: boolean): EditorTheme {
-  if (id !== "auto" && editorThemes[id]) return editorThemes[id];
-  return editorThemes[appDark ? "dark" : "light"];
+  const th = id !== "auto" && editorThemes[id] ? editorThemes[id] : editorThemes[appDark ? "dark" : "light"];
+  return th === editorThemes.light ? { ...th, dark: appDark, ext: appColors(appDark) } : th;
 }

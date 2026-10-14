@@ -1,20 +1,31 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
   import * as pdfjs from "pdfjs-dist";
-  import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
   import type { PDFDocumentLoadingTask, PDFDocumentProxy } from "pdfjs-dist";
+  import { Minus, MoveHorizontal, Plus } from "@lucide/svelte";
   import { readFileBytes } from "./ipc";
+  import { settings } from "./state.svelte";
   import { t } from "./i18n.svelte";
 
-  pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+  // new URL(…, import.meta.url) y no un import `?url`: en `tauri dev`, WebKit
+  // pide por adelantado los recursos de la carga anterior y Vite, si todavía no
+  // ha transformado este archivo, responde a `…?url` con el worker crudo. Eso
+  // queda en caché, el import se queda sin `default` y toda la página cae con
+  // «500 Internal Error».
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+    "../../node_modules/pdfjs-dist/build/pdf.worker.min.mjs",
+    import.meta.url,
+  ).href;
 
   // `path` relativo al proyecto; `version` fuerza recarga del mismo archivo.
   let {
     source,
     target = null,
+    dark = false,
     onSyncClick,
   }: {
     source: { path: string; version: number } | null;
+    dark?: boolean;
     /** destino SyncTeX: página + y en bp desde arriba */
     target?: { page: number; y: number; seq: number } | null;
     /** Ctrl/Cmd+clic sobre una página (coords en bp desde arriba-izquierda) */
@@ -32,6 +43,14 @@
   let paintTasks = new Set<{ cancel: () => void }>();
   let renderScale = 1; // px CSS por bp del último render
   let targetSeen = 0;
+  // Ctrl (o Cmd) pulsado: el clic salta al código y el cursor lo anuncia
+  let armed = $state(false);
+  const arm = (e: KeyboardEvent | PointerEvent) =>
+    (armed = !!onSyncClick && (e.ctrlKey || e.metaKey));
+  // Al soltar la propia tecla, GTK aún la da por pulsada en `ctrlKey`: sin
+  // esto el cursor se quedaba «armado» después de soltar Ctrl.
+  const disarm = (e: KeyboardEvent) =>
+    e.key === "Control" || e.key === "Meta" ? (armed = false) : arm(e);
 
   // SyncTeX forward: scroll a la página/altura y marcador temporal.
   $effect(() => {
@@ -129,8 +148,9 @@
       const holder = document.createElement("div");
       holder.className = "page";
       holder.dataset.page = String(i);
-      holder.style.width = `${Math.floor(base.width * scale)}px`;
-      holder.style.height = `${Math.floor(base.height * scale)}px`;
+      const box = deviceBox(base.width * scale, base.height * scale);
+      holder.style.width = `${box.w}px`;
+      holder.style.height = `${box.h}px`;
       container.appendChild(holder);
       observer.observe(holder);
     }
@@ -143,20 +163,25 @@
       const page = await doc.getPage(Number(holder.dataset.page));
       if (seq !== renderSeq) return;
       const vp = page.getViewport({ scale });
-      // El AppImage corre bajo X11 y WebKitGTK no refleja el escalado del
-      // compositor en devicePixelRatio: allí forzamos 2x para que no salga
-      // borroso; en dev/nativo usamos el dpr real (más nítido y menos memoria).
-      const floor = (window as unknown as { __DOTTEX_APPIMAGE__?: boolean }).__DOTTEX_APPIMAGE__ ? 2 : 1;
-      const dpr = Math.max(window.devicePixelRatio || 1, floor);
+      // Un píxel de canvas por píxel físico, exacto. WebKitGTK reduce los
+      // canvas sin filtrar: sobremuestrear (2×, 3×) no suaviza, se come los
+      // trazos finos de Computer Modern. Comprobado en la app real.
+      const box = deviceBox(vp.width, vp.height);
       const canvas = document.createElement("canvas");
-      canvas.width = Math.floor(vp.width * dpr);
-      canvas.height = Math.floor(vp.height * dpr);
-      canvas.style.width = `${Math.floor(vp.width)}px`;
-      canvas.style.height = `${Math.floor(vp.height)}px`;
+      canvas.width = box.pw;
+      canvas.height = box.ph;
+      canvas.style.width = `${box.w}px`;
+      canvas.style.height = `${box.h}px`;
       holder.style.width = canvas.style.width;
       holder.style.height = canvas.style.height;
-      const ctx = canvas.getContext("2d")!;
-      const paint = page.render({ canvas, canvasContext: ctx, viewport: vp, transform: [dpr, 0, 0, dpr, 0, 0] });
+      // Sin `canvasContext`: el contexto lo crea pdf.js, opaco y por software
+      // (`willReadFrequently`), que es su valor por defecto. Pasarle uno propio
+      // lo cambia por un canvas acelerado por GPU.
+      const paint = page.render({
+        canvas,
+        viewport: vp,
+        transform: [canvas.width / vp.width, 0, 0, canvas.height / vp.height, 0, 0],
+      });
       paintTasks.add(paint);
       try {
         await paint.promise;
@@ -164,11 +189,37 @@
         paintTasks.delete(paint);
       }
       if (seq !== renderSeq) return;
-      holder.replaceChildren(canvas);
+      // Capa de texto de pdf.js: spans transparentes sobre el canvas, para
+      // poder seleccionar y copiar. No interviene en el pintado.
+      // ponytail: sin el `endOfContent` del visor de pdf.js; arrastrar por un
+      // hueco entre párrafos puede alargar la selección. Añadirlo si molesta.
+      const textDiv = document.createElement("div");
+      textDiv.className = "textLayer";
+      textDiv.style.setProperty("--total-scale-factor", String(scale));
+      const text = new pdfjs.TextLayer({
+        textContentSource: page.streamTextContent(),
+        container: textDiv,
+        viewport: vp,
+      });
+      paintTasks.add(text);
+      text
+        .render()
+        .catch(() => {}) // cancelada por zoom/recarga
+        .finally(() => paintTasks.delete(text));
+      holder.replaceChildren(canvas, textDiv);
     } catch (e) {
       // la cancelación por zoom/recarga no es un error
       if ((e as Error)?.name !== "RenderingCancelledException") console.error("PDF page:", e);
     }
+  }
+
+  /** Tamaño de página en píxeles físicos enteros (`pw`×`ph`) y su
+   *  equivalente CSS, fraccionario si el dpr lo es (1.25 en GTK a 120 ppp). */
+  function deviceBox(cssW: number, cssH: number) {
+    const dpr = window.devicePixelRatio || 1;
+    const pw = Math.max(1, Math.floor(cssW * dpr));
+    const ph = Math.max(1, Math.floor(cssH * dpr));
+    return { pw, ph, w: pw / dpr, h: ph / dpr };
   }
 
   function setZoom(z: number) {
@@ -195,19 +246,24 @@
   });
 </script>
 
+<svelte:window onkeydown={arm} onkeyup={disarm} onblur={() => (armed = false)} />
+
 <div class="viewer">
   <div class="toolbar">
-    <button onclick={() => setZoom(zoom - 0.15)} title={t("zoomOut")}>−</button>
+    <button onclick={() => setZoom(zoom - 0.15)} title={t("zoomOut")} aria-label={t("zoomOut")}><Minus /></button>
     <span class="zoom">{Math.round(zoom * 100)}%</span>
-    <button onclick={() => setZoom(zoom + 0.15)} title={t("zoomIn")}>+</button>
-    <button onclick={() => setZoom(1)} title={t("fitWidth")}>⤢</button>
+    <button onclick={() => setZoom(zoom + 0.15)} title={t("zoomIn")} aria-label={t("zoomIn")}><Plus /></button>
+    <button onclick={() => setZoom(1)} title={t("fitWidth")} aria-label={t("fitWidth")}><MoveHorizontal /></button>
     {#if numPages}<span class="pages">{t("pageCount", numPages)}</span>{/if}
   </div>
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_click_events_have_key_events -->
   <div
     class="pdf-scroll"
+    class:invert={dark && settings.pdfInvert}
+    class:sync={armed}
     bind:this={container}
     onclick={onContainerClick}
+    onpointermove={arm}
     role="document"
     title={onSyncClick ? t("syncClickTitle") : undefined}
   >
@@ -236,6 +292,13 @@
   .toolbar button {
     width: 26px;
     height: 24px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    color: var(--fg-dim);
+  }
+  .toolbar button:hover {
+    color: var(--fg);
   }
   .zoom {
     font-size: 12px;
@@ -262,6 +325,63 @@
     box-shadow: 0 2px 8px rgb(0 0 0 / 0.25);
     flex: none;
     position: relative; /* ancla del marcador SyncTeX */
+    line-height: 0; /* sin hueco de línea base bajo el canvas */
+  }
+  /* papel oscuro: invierte la luminosidad y conserva los tonos */
+  .pdf-scroll.invert :global(.page) {
+    background: #141414;
+  }
+  .pdf-scroll.invert :global(.page canvas) {
+    filter: invert(0.92) hue-rotate(180deg);
+  }
+  /* Capa de texto: lo mínimo de pdfjs-dist/web/pdf_viewer.css (`.textLayer`).
+     Las dimensiones y el tamaño de cada span los pone pdf.js con estas variables. */
+  .pdf-scroll :global(.textLayer) {
+    --scale-round-x: 1px;
+    --scale-round-y: 1px;
+    --min-font-size: 1;
+    --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+    --min-font-size-inv: calc(1 / var(--min-font-size));
+    position: absolute;
+    inset: 0;
+    overflow: clip;
+    text-align: initial;
+    line-height: 1;
+    letter-spacing: normal;
+    word-spacing: normal;
+    -webkit-text-size-adjust: none;
+    text-size-adjust: none;
+    transform-origin: 0 0;
+  }
+  .pdf-scroll :global(.textLayer :is(span, br)) {
+    color: transparent;
+    position: absolute;
+    white-space: pre;
+    cursor: var(--cur-text, text);
+    transform-origin: 0% 0%;
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  .pdf-scroll :global(.textLayer > :not(.markedContent)),
+  .pdf-scroll :global(.textLayer .markedContent span:not(.markedContent)) {
+    --font-height: 0;
+    --scale-x: 1;
+    --rotate: 0deg;
+    font-size: calc(var(--text-scale-factor) * var(--font-height));
+    transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+  }
+  .pdf-scroll :global(.textLayer .markedContent) {
+    display: contents;
+  }
+  .pdf-scroll :global(.textLayer ::selection) {
+    background: color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+  /* Ctrl pulsado: el clic va al código, no empieza una selección */
+  .pdf-scroll.sync :global(.page),
+  .pdf-scroll.sync :global(.textLayer :is(span, br)) {
+    cursor: var(--cur-sync, pointer);
+    -webkit-user-select: none;
+    user-select: none;
   }
   .pdf-scroll :global(.sync-mark) {
     position: absolute;

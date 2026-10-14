@@ -11,8 +11,9 @@
     keymap,
     lineNumbers,
     rectangularSelection,
+    tooltips,
   } from "@codemirror/view";
-  import { Compartment, EditorSelection, EditorState } from "@codemirror/state";
+  import { Compartment, EditorSelection, EditorState, type Text } from "@codemirror/state";
   import {
     StreamLanguage,
     bracketMatching,
@@ -30,14 +31,31 @@
     completionKeymap,
   } from "@codemirror/autocomplete";
   import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
+  import { forEachDiagnostic, lintGutter, setDiagnostics, type Diagnostic } from "@codemirror/lint";
   import { vim } from "@replit/codemirror-vim";
   import { stex } from "@codemirror/legacy-modes/mode/stex";
   import { resolveTheme } from "./editorThemes";
   import { latexComplete } from "./latexComplete";
   import { mathPreview } from "./mathPreview";
   import { visualLatex } from "./visualLatex";
-  import { settings } from "./state.svelte";
+  import { errorLens } from "./errorLens";
+  import { hintFor } from "./issueHints";
+  import { lspExtension, setLspView } from "./lsp";
+  import type { Issue } from "./ipc";
+  import { app, settings } from "./state.svelte";
   import { t, type MsgKey } from "./i18n.svelte";
+  import {
+    Bold,
+    Image,
+    Italic,
+    Link,
+    List,
+    ListOrdered,
+    Redo2,
+    Table,
+    Underline,
+    Undo2,
+  } from "@lucide/svelte";
   import "katex/dist/katex.min.css";
 
   const latex = StreamLanguage.define(stex);
@@ -66,7 +84,7 @@
     visual?: boolean;
     /** preview: no edita, sin barra, sin cursor-reveal */
     readonly?: boolean;
-    goto?: { line: number; seq: number } | null;
+    goto?: { line: number; col: number; seq: number } | null;
     onSave?: (text: string) => void;
     onDirty?: () => void;
     /** ~450ms sin teclear con vista previa automática activa */
@@ -87,6 +105,50 @@
 
   const opts = new Compartment();
   const isTex = $derived(path.endsWith(".tex"));
+
+  // texlab: solo el editor editable de fuentes LaTeX se conecta al servidor
+  const lspComp = new Compartment();
+  let lspSeen = -1; // sesión de texlab con la que se construyó el estado
+  function lspExt() {
+    lspSeen = app.lspSession;
+    return !readonly && /\.(tex|bib|sty|cls)$/.test(path) ? lspExtension(path) : [];
+  }
+
+  // ---- problemas dentro del editor (sintaxis en vivo + última compilación) ----
+  type Diag = Diagnostic & { compile?: boolean };
+  function toDiagnostic(doc: Text, i: Issue): Diag | null {
+    if (!i.line) return null;
+    const line = doc.line(Math.min(i.line, doc.lines));
+    let from: number;
+    let to: number;
+    if (i.col != null) {
+      // texlab da el rango exacto
+      const end = doc.line(Math.min(i.endLine ?? i.line, doc.lines));
+      from = Math.min(line.from + i.col, line.to);
+      to = Math.max(from, Math.min(end.from + (i.endCol ?? i.col), end.to));
+    } else {
+      // el log solo da la línea; `context` es esa línea hasta donde TeX se
+      // detuvo, así que su último símbolo es el culpable
+      from = line.from + (line.text.length - line.text.trimStart().length);
+      to = line.to;
+      const tail = i.context?.trimEnd().slice(-24);
+      const at = tail ? line.text.indexOf(tail) : -1;
+      if (tail && at >= 0) {
+        to = line.from + at + tail.length;
+        const tok = /\\[a-zA-Z@]+$|\S$/.exec(line.text.slice(0, at + tail.length));
+        from = line.from + (tok ? tok.index : at);
+      }
+    }
+    const hint = hintFor(i.message);
+    return {
+      from,
+      to,
+      severity: i.severity,
+      message: hint ? `${i.message}\n${t(hint)}` : i.message,
+      source: t(i.source === "syntax" ? "srcSyntax" : "srcCompile"),
+      compile: i.source !== "syntax",
+    };
+  }
 
   /** Texto actual del buffer (para compilar sin perder cambios sin guardar). */
   export function getText(): string | undefined {
@@ -180,6 +242,7 @@
       !readonly && settings.closeBrackets ? [closeBrackets(), keymap.of(closeBracketsKeymap)] : [],
       drawSelection({ cursorBlinkRate: settings.steadyCursor ? 0 : 1200 }),
       !readonly && settings.mathPreview ? mathPreview : [],
+      !readonly && settings.inlineErrors ? errorLens : [],
       visual
         ? visualLatex({
             preamble: (n) => t("preambleLines", n),
@@ -205,6 +268,10 @@
       doc: text,
       extensions: [
         opts.of(optExts()),
+        lspComp.of(lspExt()),
+        // en el body: dentro del panel, el autocompletado y los tooltips de
+        // error se cortaban contra el visor PDF
+        tooltips({ parent: document.body }),
         keymap.of([
           {
             key: "Mod-s",
@@ -238,6 +305,7 @@
         ]),
         // equivalente a basicSetup, desmontado para poder configurar sus piezas
         lineNumbers(),
+        readonly ? [] : lintGutter(),
         highlightActiveLineGutter(),
         highlightSpecialChars(),
         history(),
@@ -287,9 +355,11 @@
   onMount(() => {
     view = new EditorView({ state: makeState(content), parent: host });
     shownPath = path;
+    if (!readonly) setLspView(view);
   });
 
   onDestroy(() => {
+    if (!readonly) setLspView(null);
     clearTimeout(idleTimer);
     view?.destroy();
   });
@@ -300,7 +370,8 @@
     if (!view || !goto || goto.seq === gotoSeen) return;
     gotoSeen = goto.seq;
     const line = Math.min(goto.line, view.state.doc.lines);
-    const pos = view.state.doc.line(line).from;
+    const l = view.state.doc.line(line);
+    const pos = Math.min(l.from + goto.col, l.to);
     view.dispatch({
       selection: { anchor: pos },
       effects: EditorView.scrollIntoView(pos, { y: "center" }),
@@ -323,36 +394,71 @@
     }
   });
 
+  // texlab arrancó o cayó: reconectar el archivo abierto
+  $effect(() => {
+    if (!view || app.lspSession === lspSeen) return;
+    view.dispatch({ effects: lspComp.reconfigure(lspExt()) });
+  });
+
+  // Vuelca los problemas del archivo al estado de lint (subrayado, margen,
+  // tooltip y mensaje en línea). Va después del efecto de cambio de archivo:
+  // un estado recién creado empieza sin diagnósticos.
+  let diagPath = "";
+  let diagCompile: Issue[] | undefined;
+  $effect(() => {
+    if (!view || readonly) return;
+    const doc = view.state.doc;
+    const diags = app.lspIssues
+      .filter((i) => i.file === path)
+      .map((i) => toDiagnostic(doc, i))
+      .filter((d) => d !== null);
+    if (path !== diagPath || app.issues !== diagCompile) {
+      diagPath = path;
+      diagCompile = app.issues;
+      for (const i of app.issues) {
+        const d = i.file === path ? toDiagnostic(doc, i) : null;
+        if (d) diags.push(d);
+      }
+    } else {
+      // misma compilación: sus números de línea ya son viejos, pero lint los
+      // ha ido moviendo con cada edición; se conservan donde están
+      forEachDiagnostic(view.state, (d: Diag, from, to) => {
+        if (d.compile) diags.push({ ...d, from, to });
+      });
+    }
+    view.dispatch(setDiagnostics(view.state, diags));
+  });
+
   // configuración del usuario + tema (lee `settings` y `dark`)
   $effect(() => {
     view?.dispatch({ effects: opts.reconfigure(optExts()) });
   });
 </script>
 
-<div class="wrap">
+<div class="wrap" class:visual>
   {#if isTex && !readonly}
     <div class="latexbar">
-      <button title={t("tbUndo")} onclick={() => toolCmd(undo)}>↶</button>
-      <button title={t("tbRedo")} onclick={() => toolCmd(redo)}>↷</button>
+      <button title={t("tbUndo")} aria-label={t("tbUndo")} onclick={() => toolCmd(undo)}><Undo2 /></button>
+      <button title={t("tbRedo")} aria-label={t("tbRedo")} onclick={() => toolCmd(redo)}><Redo2 /></button>
       <span class="tsep"></span>
-      <button class="bf" title={t("tbBold")} onclick={() => toolWrap("\\textbf{", "}")}>B</button>
-      <button class="it" title={t("tbItalic")} onclick={() => toolWrap("\\textit{", "}")}>I</button>
-      <button class="ul" title={t("tbUnderline")} onclick={() => toolWrap("\\underline{", "}")}>U</button>
+      <button title={t("tbBold")} aria-label={t("tbBold")} onclick={() => toolWrap("\\textbf{", "}")}><Bold /></button>
+      <button title={t("tbItalic")} aria-label={t("tbItalic")} onclick={() => toolWrap("\\textit{", "}")}><Italic /></button>
+      <button title={t("tbUnderline")} aria-label={t("tbUnderline")} onclick={() => toolWrap("\\underline{", "}")}><Underline /></button>
       <span class="tsep"></span>
       <select title={t("tbHeadings")} onchange={(e) => toolPick(e, HEADINGS)}>
         <option value="" disabled selected>{t("tbHeadings")}</option>
         {#each HEADINGS as h, i (h.key)}<option value={i}>{t(h.key)}</option>{/each}
       </select>
-      <button title={t(ITEMIZE.key)} onclick={() => toolWrap(ITEMIZE.before, ITEMIZE.after)}>•≡</button>
-      <button title={t(ENUMERATE.key)} onclick={() => toolWrap(ENUMERATE.before, ENUMERATE.after)}>1.</button>
+      <button title={t(ITEMIZE.key)} aria-label={t(ITEMIZE.key)} onclick={() => toolWrap(ITEMIZE.before, ITEMIZE.after)}><List /></button>
+      <button title={t(ENUMERATE.key)} aria-label={t(ENUMERATE.key)} onclick={() => toolWrap(ENUMERATE.before, ENUMERATE.after)}><ListOrdered /></button>
       <span class="tsep"></span>
       <select title={t("tbMath")} onchange={(e) => toolPick(e, MATHS)}>
-        <option value="" disabled selected>ƒ(x)</option>
+        <option value="" disabled selected>{t("tbMathShort")}</option>
         {#each MATHS as m, i (m.key)}<option value={i}>{t(m.key)}</option>{/each}
       </select>
-      <button title={t("tbLink")} onclick={toolLink}>🔗</button>
-      <button title={t(TABLE.key)} onclick={() => toolWrap(TABLE.before, TABLE.after)}>⊞</button>
-      <button title={t(IMAGE.key)} onclick={() => toolWrap(IMAGE.before, IMAGE.after)}>🖼</button>
+      <button title={t("tbLink")} aria-label={t("tbLink")} onclick={toolLink}><Link /></button>
+      <button title={t(TABLE.key)} aria-label={t(TABLE.key)} onclick={() => toolWrap(TABLE.before, TABLE.after)}><Table /></button>
+      <button title={t(IMAGE.key)} aria-label={t(IMAGE.key)} onclick={() => toolWrap(IMAGE.before, IMAGE.after)}><Image /></button>
     </div>
   {/if}
   <div class="editor" bind:this={host}></div>
@@ -361,6 +467,10 @@
 <style>
   .wrap {
     height: 100%;
+    /* bajo la barra de migas: sin esto WebKit no lo encoge y el final del
+       editor queda recortado, fuera del alcance del scroll */
+    flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
   }
@@ -375,23 +485,16 @@
     border-bottom: 1px solid var(--border);
   }
   .latexbar button {
-    min-width: 26px;
+    width: 26px;
     height: 24px;
-    font-size: 13px;
+    padding: 0;
+    display: grid;
+    place-items: center;
     color: var(--fg-dim);
   }
   .latexbar button:hover {
     color: var(--fg);
     background: var(--hover);
-  }
-  .latexbar .bf {
-    font-weight: 700;
-  }
-  .latexbar .it {
-    font-style: italic;
-  }
-  .latexbar .ul {
-    text-decoration: underline;
   }
   .latexbar select {
     font: inherit;

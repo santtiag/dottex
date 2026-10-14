@@ -112,8 +112,13 @@ pub async fn open_project(
     });
     // el SyncTeX cacheado pertenece al proyecto anterior
     *crate::lock_or_recover(&state.synctex) = None;
+    // y su texlab también: el frontend arranca otro con `lsp_start`
+    *crate::lock_or_recover(&state.lsp) = None;
 
-    add_recent(&name, &root);
+    // editar una plantilla no la convierte en un proyecto reciente
+    if !crate::templates::is_template(&root) {
+        add_recent(&name, &root);
+    }
 
     Ok(ProjectInfo {
         name,
@@ -256,7 +261,7 @@ fn save_config(root: &Path, cfg: &ProjectConfig) {
     }
 }
 
-fn detect_root_file(root: &Path) -> Option<String> {
+pub(crate) fn detect_root_file(root: &Path) -> Option<String> {
     use std::sync::OnceLock;
     static MAGIC_RE: OnceLock<regex::Regex> = OnceLock::new();
     static INPUTS_RE: OnceLock<regex::Regex> = OnceLock::new();

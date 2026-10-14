@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Hammer, Languages, Palette, SquarePen, X } from "@lucide/svelte";
   import { app, setEngine, settings } from "./state.svelte";
   import { editorThemes } from "./editorThemes";
   import { t, LOCALES, type MsgKey } from "./i18n.svelte";
@@ -57,24 +58,35 @@
     ["pt", "Português"],
   ];
 
-  const CATS: [typeof section, MsgKey][] = [
-    ["editor", "catEditor"],
-    ["appearance", "catAppearance"],
-    ["compile", "catCompile"],
-    ["language", "catLanguage"],
-  ];
+  const CATS = [
+    ["editor", "catEditor", SquarePen],
+    ["appearance", "catAppearance", Palette],
+    ["compile", "catCompile", Hammer],
+    ["language", "catLanguage", Languages],
+  ] as const;
+
+  type BoolKey = {
+    [K in keyof typeof settings]: (typeof settings)[K] extends boolean ? K : never;
+  }[keyof typeof settings];
 </script>
 
 <svelte:window onkeydown={(e) => e.key === "Escape" && onClose()} />
+
+{#snippet toggle(key: BoolKey, label: MsgKey, desc: MsgKey)}
+  <label class="row">
+    <span class="lbl">{t(label)}<small>{t(desc)}</small></span>
+    <input type="checkbox" bind:checked={settings[key]} />
+  </label>
+{/snippet}
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <div class="backdrop" onclick={(e) => e.target === e.currentTarget && onClose()}>
   <div class="dialog" role="dialog" aria-modal="true" aria-label={t("settings")}>
     <nav class="sidebar">
       <h2>{t("settings")}</h2>
-      {#each CATS as [id, key] (id)}
+      {#each CATS as [id, key, Icon] (id)}
         <button class="cat" class:active={section === id} onclick={() => (section = id)}>
-          {t(key)}
+          <Icon />{t(key)}
         </button>
       {/each}
     </nav>
@@ -82,115 +94,129 @@
     <div class="panel">
       <header>
         <h3>{t(CATS.find(([id]) => id === section)![1])}</h3>
-        <button class="close" onclick={onClose} title={t("close")} aria-label={t("close")}>✕</button>
+        <button class="close" onclick={onClose} title={t("close")} aria-label={t("close")}><X /></button>
       </header>
 
       <div class="content">
         {#if section === "editor"}
-          <label class="row">
-            <span class="lbl">{t("autocomplete")}<small>{t("autocompleteDesc")}</small></span>
-            <input type="checkbox" bind:checked={settings.autocomplete} />
-          </label>
-          <label class="row">
-            <span class="lbl">{t("closeBrackets")}<small>{t("closeBracketsDesc")}</small></span>
-            <input type="checkbox" bind:checked={settings.closeBrackets} />
-          </label>
-          <label class="row">
-            <span class="lbl">{t("steadyCursor")}<small>{t("steadyCursorDesc")}</small></span>
-            <input type="checkbox" bind:checked={settings.steadyCursor} />
-          </label>
-          <label class="row">
-            <span class="lbl">{t("vim")}<small>{t("vimDesc")}</small></span>
-            <input type="checkbox" bind:checked={settings.vim} />
-          </label>
-          <label class="row">
-            <span class="lbl">{t("breadcrumbs")}<small>{t("breadcrumbsDesc")}</small></span>
-            <input type="checkbox" bind:checked={settings.breadcrumbs} />
-          </label>
-          <label class="row">
-            <span class="lbl">{t("mathPreview")}<small>{t("mathPreviewDesc")}</small></span>
-            <input type="checkbox" bind:checked={settings.mathPreview} />
-          </label>
-          <label class="row">
-            <span class="lbl">{t("editorTheme")}<small>{t("editorThemeDesc")}</small></span>
-            <select bind:value={settings.editorTheme}>
-              <option value="auto">{t("editorThemeAuto")}</option>
-              <optgroup label={t("themeLight")}>
-                {#each THEMES.filter(([, th]) => !th.dark) as [id, th] (id)}
-                  <option value={id}>{th.label}</option>
-                {/each}
-              </optgroup>
-              <optgroup label={t("themeDark")}>
-                {#each THEMES.filter(([, th]) => th.dark) as [id, th] (id)}
-                  <option value={id}>{th.label}</option>
-                {/each}
-              </optgroup>
-            </select>
-          </label>
-          <label class="row">
-            <span class="lbl">{t("fontFamily")}</span>
-            <select bind:value={settings.fontFamily}>
-              {#each FONTS as f (f)}<option value={f}>{f}</option>{/each}
-            </select>
-          </label>
-          <label class="row">
-            <span class="lbl">{t("fontSize")}</span>
-            <input type="number" min="10" max="24" bind:value={settings.fontSize} />
-          </label>
-          <label class="row">
-            <span class="lbl">{t("lineHeight")}</span>
-            <input type="number" min="1" max="2.5" step="0.1" bind:value={settings.lineHeight} />
-          </label>
+          <h4>{t("grpWriting")}</h4>
+          <div class="group">
+            {@render toggle("autocomplete", "autocomplete", "autocompleteDesc")}
+            {@render toggle("closeBrackets", "closeBrackets", "closeBracketsDesc")}
+            {@render toggle("vim", "vim", "vimDesc")}
+          </div>
+          <h4>{t("grpAids")}</h4>
+          <div class="group">
+            {@render toggle("breadcrumbs", "breadcrumbs", "breadcrumbsDesc")}
+            {@render toggle("mathPreview", "mathPreview", "mathPreviewDesc")}
+            {@render toggle("inlineErrors", "inlineErrors", "inlineErrorsDesc")}
+            {@render toggle("steadyCursor", "steadyCursor", "steadyCursorDesc")}
+          </div>
         {:else if section === "appearance"}
-          <label class="row">
-            <span class="lbl">{t("generalTheme")}<small>{t("generalThemeDesc")}</small></span>
-            <select
-              bind:value={app.theme}
-              onchange={() => localStorage.setItem("dottex-theme", app.theme)}
-            >
-              <option value="auto">{t("themeAuto")}</option>
-              <option value="light">{t("themeLight")}</option>
-              <option value="dark">{t("themeDark")}</option>
-            </select>
-          </label>
-        {:else if section === "compile"}
-          {#if app.project}
+          <h4>{t("grpTheme")}</h4>
+          <div class="group">
             <label class="row">
-              <span class="lbl">{t("engine")}<small>{t("engineDesc")}</small></span>
+              <span class="lbl">{t("generalTheme")}<small>{t("generalThemeDesc")}</small></span>
               <select
-                bind:value={app.project.engine}
-                onchange={() => {
-                  if (app.project) setEngine(app.project.engine);
-                }}
+                bind:value={app.theme}
+                onchange={() => localStorage.setItem("dottex-theme", app.theme)}
               >
-                <option value="tectonic">Tectonic</option>
-                <option value="pdflatex">pdfLaTeX</option>
-                <option value="xelatex">XeLaTeX</option>
-                <option value="lualatex">LuaLaTeX</option>
+                <option value="auto">{t("themeAuto")}</option>
+                <option value="light">{t("themeLight")}</option>
+                <option value="dark">{t("themeDark")}</option>
               </select>
             </label>
-            <p class="hint">{t("engineHint")}</p>
-          {:else}
-            <p class="hint">{t("engineNoProject")}</p>
-          {/if}
+            <label class="row">
+              <span class="lbl">{t("editorTheme")}<small>{t("editorThemeDesc")}</small></span>
+              <select bind:value={settings.editorTheme}>
+                <option value="auto">{t("editorThemeAuto")}</option>
+                <!-- "light" sigue la paleta de la app en claro y en oscuro -->
+                <option value="light">{t("editorThemeApp")}</option>
+                <optgroup label={t("themeLight")}>
+                  {#each THEMES.filter(([id, th]) => !th.dark && id !== "light") as [id, th] (id)}
+                    <option value={id}>{th.label}</option>
+                  {/each}
+                </optgroup>
+                <optgroup label={t("themeDark")}>
+                  {#each THEMES.filter(([, th]) => th.dark) as [id, th] (id)}
+                    <option value={id}>{th.label}</option>
+                  {/each}
+                </optgroup>
+              </select>
+            </label>
+          </div>
+          <h4>{t("grpType")}</h4>
+          <div class="group">
+            <label class="row">
+              <span class="lbl">{t("fontFamily")}</span>
+              <select bind:value={settings.fontFamily}>
+                {#each FONTS as f (f)}<option value={f}>{f}</option>{/each}
+              </select>
+            </label>
+            <label class="row">
+              <span class="lbl">{t("fontSize")}</span>
+              <input type="number" min="10" max="24" bind:value={settings.fontSize} />
+            </label>
+            <label class="row">
+              <span class="lbl">{t("lineHeight")}</span>
+              <input type="number" min="1" max="2.5" step="0.1" bind:value={settings.lineHeight} />
+            </label>
+          </div>
+          <h4>{t("grpPdf")}</h4>
+          <div class="group">
+            {@render toggle("pdfInvert", "pdfInvert", "pdfInvertDesc")}
+          </div>
+          <h4>{t("grpEffects")}</h4>
+          <div class="group">
+            {@render toggle("customCursor", "customCursor", "customCursorDesc")}
+            {@render toggle("clickFx", "clickFx", "clickFxDesc")}
+          </div>
+        {:else if section === "compile"}
+          <h4>{t("grpEngine")}</h4>
+          <div class="group">
+            {#if app.project}
+              <label class="row">
+                <span class="lbl">{t("engine")}<small>{t("engineDesc")}</small></span>
+                <select
+                  bind:value={app.project.engine}
+                  onchange={() => {
+                    if (app.project) setEngine(app.project.engine);
+                  }}
+                >
+                  <option value="tectonic">Tectonic</option>
+                  <option value="pdflatex">pdfLaTeX</option>
+                  <option value="xelatex">XeLaTeX</option>
+                  <option value="lualatex">LuaLaTeX</option>
+                </select>
+              </label>
+            {/if}
+            <p class="hint">{t(app.project ? "engineHint" : "engineNoProject")}</p>
+          </div>
+          <h4>{t("grpPreview")}</h4>
+          <div class="group">
+            {@render toggle("autoCompile", "autoCompile", "autoCompileDesc")}
+          </div>
         {:else}
-          <label class="row">
-            <span class="lbl">{t("uiLanguage")}<small>{t("uiLanguageDesc")}</small></span>
-            <select bind:value={settings.locale}>
-              {#each LOCALES as [code, name] (code)}<option value={code}>{name}</option>{/each}
-            </select>
-          </label>
-          <label class="row">
-            <span class="lbl">{t("spellcheck")}<small>{t("spellcheckDesc")}</small></span>
-            <input type="checkbox" bind:checked={settings.spellcheck} />
-          </label>
-          <label class="row">
-            <span class="lbl">{t("spellLang")}</span>
-            <select bind:value={settings.spellLang}>
-              {#each LANGS as [code, name] (code)}<option value={code}>{name}</option>{/each}
-            </select>
-          </label>
-          <p class="hint">{t("dictHint")}</p>
+          <h4>{t("grpInterface")}</h4>
+          <div class="group">
+            <label class="row">
+              <span class="lbl">{t("uiLanguage")}<small>{t("uiLanguageDesc")}</small></span>
+              <select bind:value={settings.locale}>
+                {#each LOCALES as [code, name] (code)}<option value={code}>{name}</option>{/each}
+              </select>
+            </label>
+          </div>
+          <h4>{t("grpSpelling")}</h4>
+          <div class="group">
+            {@render toggle("spellcheck", "spellcheck", "spellcheckDesc")}
+            <label class="row">
+              <span class="lbl">{t("spellLang")}</span>
+              <select bind:value={settings.spellLang}>
+                {#each LANGS as [code, name] (code)}<option value={code}>{name}</option>{/each}
+              </select>
+            </label>
+            <p class="hint">{t("dictHint")}</p>
+          </div>
         {/if}
       </div>
     </div>
@@ -208,13 +234,13 @@
   }
   .dialog {
     display: grid;
-    grid-template-columns: 176px 1fr;
+    grid-template-columns: 200px 1fr;
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 12px;
     box-shadow: 0 12px 40px rgb(0 0 0 / 0.3);
-    width: min(700px, 94vw);
-    height: min(520px, 84vh);
+    width: min(760px, 94vw);
+    height: min(560px, 86vh);
     overflow: hidden;
   }
   /* barra de categorías */
@@ -232,6 +258,9 @@
     font-weight: 700;
   }
   .cat {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     text-align: left;
     padding: 7px 10px;
     font-size: 13px;
@@ -268,7 +297,8 @@
   }
   .close {
     color: var(--fg-dim);
-    font-size: 14px;
+    padding: 4px;
+    display: grid;
   }
   .content {
     flex: 1;
@@ -276,13 +306,28 @@
     overflow-y: auto;
     padding: 4px 18px 18px;
   }
+  /* grupo de opciones con su encabezado */
+  h4 {
+    margin: 16px 2px 6px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--fg-dim);
+  }
+  .group {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    padding: 0 12px;
+  }
   .row {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 16px;
     padding: 9px 0;
-    cursor: pointer;
+    cursor: var(--cur-pointer, pointer);
     border-bottom: 1px solid var(--border);
   }
   .row:last-child {
@@ -306,7 +351,7 @@
     height: 20px;
     border-radius: 999px;
     background: var(--border);
-    cursor: pointer;
+    cursor: var(--cur-pointer, pointer);
     flex: none;
     transition: background 0.15s ease;
   }
@@ -339,7 +384,7 @@
     font: inherit;
     font-size: 12.5px;
     color: inherit;
-    background: var(--bg);
+    background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 6px;
     padding: 4px 6px;
@@ -348,7 +393,8 @@
   .hint {
     font-size: 11.5px;
     color: var(--fg-dim);
-    margin: 10px 0 0;
+    margin: 0;
+    padding: 9px 0;
     line-height: 1.5;
   }
 </style>

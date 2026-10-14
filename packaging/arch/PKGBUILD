@@ -1,0 +1,49 @@
+# Maintainer: santtiag <https://github.com/santtiag>
+#
+# Compila dottex desde este mismo checkout (no descarga nada):
+#   cd packaging/arch && makepkg -si
+# Si pnpm viene de corepack/npm y no de pacman, makepkg no lo ve como
+# dependencia instalada: usa `makepkg -di` (omite esa comprobación).
+pkgname=dottex
+pkgver=0.3.0
+pkgrel=1
+pkgdesc="Local-first desktop LaTeX editor: an Overleaf on your machine"
+arch=('x86_64' 'aarch64')
+url="https://github.com/santtiag/dottex"
+license=('MIT')
+depends=('webkit2gtk-4.1' 'gtk3')
+makedepends=('cargo' 'nodejs' 'pnpm')
+optdepends=(
+  'tectonic: system LaTeX engine (otherwise downloaded on first compile)'
+  'texlab: system LaTeX language server (otherwise downloaded on first project open)'
+  'texlive-binextra: latexmk, needed by the pdfLaTeX/XeLaTeX/LuaLaTeX engines'
+  'texlive-latexextra: extra packages used by journal templates'
+  'texlive-fontsrecommended: fonts for the classic engines'
+)
+# el LTO de makepkg rompe el enlazado de crates con C; debug infla el binario
+options=('!lto' '!debug')
+
+pkgver() {
+  sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$startdir/../../src-tauri/tauri.conf.json" | head -1
+}
+
+build() {
+  cd "$startdir/../.."
+  pnpm install --frozen-lockfile
+  pnpm tauri build --no-bundle
+}
+
+package() {
+  cd "$startdir/../.."
+  local icons="$pkgdir/usr/share/icons/hicolor" s
+
+  install -Dm755 src-tauri/target/release/dottex "$pkgdir/usr/bin/dottex"
+  install -Dm644 packaging/arch/dottex.desktop "$pkgdir/usr/share/applications/dottex.desktop"
+  for s in 32 64 128; do
+    install -Dm644 "src-tauri/icons/${s}x${s}.png" "$icons/${s}x${s}/apps/dottex.png"
+  done
+  install -Dm644 "src-tauri/icons/128x128@2x.png" "$icons/256x256/apps/dottex.png"
+  install -Dm644 src-tauri/icons/icon.png "$icons/512x512/apps/dottex.png"
+  install -Dm644 src-tauri/app-icon.svg "$icons/scalable/apps/dottex.svg"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

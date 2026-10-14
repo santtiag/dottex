@@ -2,9 +2,11 @@ mod compile;
 mod completion;
 mod fs_ops;
 mod log_parse;
+mod lsp;
 mod project;
 mod search;
 mod synctex;
+mod templates;
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -31,12 +33,22 @@ pub struct AppState {
     pub tectonic: Mutex<Option<PathBuf>>,
     /// SyncTeX parseado, cacheado por (ruta, mtime); se invalida al recompilar.
     pub(crate) synctex: Mutex<Option<(PathBuf, SystemTime, Arc<synctex::SyncData>)>>,
+    /// texlab del proyecto abierto; se dropea (y muere) al cambiar o cerrar.
+    pub(crate) lsp: Mutex<Option<lsp::LspServer>>,
 }
 
 /// `lock()` que sobrevive a un mutex envenenado: un panic previo no debe
 /// dejar todos los comandos muertos por el resto de la sesión.
 pub fn lock_or_recover<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Un nombre plano, nunca una ruta (ids de papelera, nombres de plantilla).
+pub fn check_plain_name(name: &str) -> Result<(), String> {
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name == "." || name == ".." {
+        return Err("Nombre inválido".into());
+    }
+    Ok(())
 }
 
 /// Ruta relativa a la raíz del proyecto, con separador `/`.
@@ -188,20 +200,6 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
-        .setup(|_app| {
-            // Señala al frontend que corre dentro de un AppImage (X11 forzado por
-            // linuxdeploy) para que el visor de PDF suba la resolución del canvas.
-            #[cfg(target_os = "linux")]
-            {
-                use tauri::Manager;
-                if std::env::var("APPIMAGE").is_ok() {
-                    if let Some(w) = _app.get_webview_window("main") {
-                        let _ = w.eval("window.__DOTTEX_APPIMAGE__=true");
-                    }
-                }
-            }
-            Ok(())
-        })
         .invoke_handler(tauri::generate_handler![
             project::open_project,
             project::get_recent_projects,
@@ -228,6 +226,14 @@ pub fn run() {
             fs_ops::restore_trash,
             fs_ops::delete_trash_item,
             fs_ops::empty_trash,
+            lsp::lsp_start,
+            lsp::lsp_send,
+            lsp::lsp_stop,
+            templates::list_templates,
+            templates::create_from_template,
+            templates::new_template,
+            templates::save_as_template,
+            templates::delete_template,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

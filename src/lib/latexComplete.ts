@@ -60,9 +60,26 @@ async function data(): Promise<CompletionData> {
   return cache;
 }
 
+const REF_CTX = /\\(?:ref|eqref|autoref|pageref|vref|cref|Cref|nameref)\{[^{}]*/;
+const CITE_CTX = /\\[a-zA-Z]*[cC]ite[a-zA-Z]*\*?(?:\[[^\]]*\])*\{[^{}]*/;
+const ENV_CTX = /\\(?:begin|end)\{[a-zA-Z*]*/;
+const CMD_CTX = /\\[a-zA-Z]*/;
+
+let lspActive = false;
+
+/** Con texlab en marcha, referencias, citas, entornos y comandos los completa
+ *  el servidor; aquí solo quedan los snippets del usuario. */
+export function setLspActive(on: boolean) {
+  lspActive = on;
+}
+
 export async function latexComplete(ctx: CompletionContext): Promise<CompletionResult | null> {
+  if (lspActive && [REF_CTX, CITE_CTX, ENV_CTX, CMD_CTX].some((re) => ctx.matchBefore(re))) {
+    return null;
+  }
+
   // \ref{...} y variantes -> labels del proyecto + los del buffer sin guardar
-  let m = ctx.matchBefore(/\\(?:ref|eqref|autoref|pageref|vref|cref|Cref|nameref)\{[^{}]*/);
+  let m = ctx.matchBefore(REF_CTX);
   if (m) {
     const d = await data();
     const buffer = [...ctx.state.doc.toString().matchAll(/\\label\s*\{([^}]+)\}/g)].map(
@@ -77,7 +94,7 @@ export async function latexComplete(ctx: CompletionContext): Promise<CompletionR
   }
 
   // \cite{...} y variantes (con listas separadas por coma) -> claves .bib
-  m = ctx.matchBefore(/\\[a-zA-Z]*[cC]ite[a-zA-Z]*\*?(?:\[[^\]]*\])*\{[^{}]*/);
+  m = ctx.matchBefore(CITE_CTX);
   if (m) {
     const d = await data();
     return {
@@ -88,7 +105,7 @@ export async function latexComplete(ctx: CompletionContext): Promise<CompletionR
   }
 
   // \begin{...} / \end{...} -> entornos
-  m = ctx.matchBefore(/\\(?:begin|end)\{[a-zA-Z*]*/);
+  m = ctx.matchBefore(ENV_CTX);
   if (m) {
     return {
       from: m.from + m.text.indexOf("{") + 1,
@@ -98,7 +115,7 @@ export async function latexComplete(ctx: CompletionContext): Promise<CompletionR
   }
 
   // \comando -> comandos comunes + \newcommand del proyecto
-  m = ctx.matchBefore(/\\[a-zA-Z]*/);
+  m = ctx.matchBefore(CMD_CTX);
   if (m) {
     const d = await data();
     const cmds = [...new Set([...STATIC_COMMANDS, ...d.commands])];

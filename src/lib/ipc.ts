@@ -31,6 +31,19 @@ export interface Issue {
   file: string | null;
   line: number | null;
   message: string;
+  /** compilación: la línea fuente hasta el punto donde TeX se detuvo */
+  context?: string | null;
+  /** "syntax" = texlab, en vivo; ausente = log de la última compilación */
+  source?: "syntax";
+  /** solo sintaxis: rango exacto (columnas UTF-16 base 0, líneas base 1) */
+  col?: number;
+  endLine?: number;
+  endCol?: number;
+}
+
+export interface LspSession {
+  id: number;
+  root_uri: string;
 }
 
 export interface CompileStatus {
@@ -81,6 +94,13 @@ export interface TrashEntry {
   deleted_at: number;
 }
 
+export interface Template {
+  name: string;
+  path: string; // absoluta: editar una plantilla es abrirla como proyecto
+  class: string | null;
+  files: number;
+}
+
 export const openProject = (path: string) => invoke<ProjectInfo>("open_project", { path });
 export const setRootFile = (path: string) => invoke("set_root_file", { path });
 export const setEngine = (engine: string) => invoke("set_engine", { engine });
@@ -115,3 +135,12 @@ export const renamePath = (from: string, to: string) => invoke("rename_path", { 
 export const deletePath = (path: string) => invoke("delete_path", { path });
 export const cleanArtifacts = () => invoke("clean_artifacts");
 export const compile = () => invoke("compile");
+export const listTemplates = () => invoke<Template[]>("list_templates");
+export const createFromTemplate = (template: string | null, destParent: string, name: string) =>
+  invoke<string>("create_from_template", { template, destParent, name });
+export const newTemplate = (name: string) => invoke<string>("new_template", { name });
+export const saveAsTemplate = (name: string) => invoke("save_as_template", { name });
+export const deleteTemplate = (name: string) => invoke("delete_template", { name });
+export const lspStart = () => invoke<LspSession>("lsp_start");
+export const lspSend = (message: string) => invoke("lsp_send", { message });
+export const lspStop = () => invoke("lsp_stop");

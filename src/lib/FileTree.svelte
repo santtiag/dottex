@@ -1,5 +1,22 @@
 <script lang="ts">
+  import type { Component } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
+  import {
+    ArchiveRestore,
+    BookOpen,
+    ChevronDown,
+    ChevronRight,
+    File,
+    FileCode,
+    FilePlus,
+    FileText,
+    Folder,
+    FolderOpen,
+    FolderPlus,
+    Image,
+    Trash,
+    X,
+  } from "@lucide/svelte";
   import type { TrashEntry, TreeNode } from "./ipc";
   import * as ipc from "./ipc";
   import { app, openFile, reloadTree, setRootFile, toast } from "./state.svelte";
@@ -36,33 +53,15 @@
     return i === -1 ? "" : path.slice(0, i);
   }
 
-  // iconos SVG por tipo de archivo (documento con esquina doblada + variantes)
-  const svgDoc = (fill: string, extra = "") =>
-    `<svg width="15" height="15" viewBox="0 0 16 16"><path fill="${fill}" d="M4.5 1.5h4.9c.27 0 .52.1.71.3l2.6 2.6c.19.19.29.44.29.7V13c0 .83-.67 1.5-1.5 1.5h-7A1.5 1.5 0 0 1 3 13V3c0-.83.67-1.5 1.5-1.5z"/><path fill="#fff" fill-opacity=".4" d="M9.6 1.7V4c0 .55.45 1 1 1h2.2z"/>${extra}</svg>`;
-  const textLines =
-    '<path stroke="#fff" stroke-opacity=".9" stroke-width="1.1" stroke-linecap="round" d="M5.3 8h5.4M5.3 10h5.4M5.3 12h3.4"/>';
-  const ICONS = {
-    dir: '<svg width="15" height="15" viewBox="0 0 16 16"><path fill="#dca738" d="M1.5 12.4V3.6c0-.6.5-1.1 1.1-1.1h3.1c.32 0 .62.14.83.38l1.16 1.32h5.7c.6 0 1.1.5 1.1 1.1v7.1c0 .6-.5 1.1-1.1 1.1H2.6c-.6 0-1.1-.5-1.1-1.1z"/><path fill="#fff" fill-opacity=".25" d="M1.5 5.1h13v1.1h-13z"/></svg>',
-    dirOpen:
-      '<svg width="15" height="15" viewBox="0 0 16 16"><path fill="#b98a2e" d="M1.5 12V3.6c0-.6.5-1.1 1.1-1.1h3.1c.32 0 .62.14.83.38L7.7 4.2h5.7c.6 0 1.1.5 1.1 1.1v1.2H4.3c-.7 0-1.3.45-1.5 1.1L1.5 12z"/><path fill="#dca738" d="M4.2 7.3h10.2c.68 0 1.17.66.97 1.31l-1.06 3.5c-.19.63-.77 1.06-1.43 1.06H2.4c-.7 0-1.19-.68-.96-1.34l1.34-3.5c.21-.62.79-1.03 1.42-1.03z"/></svg>',
-    tex: svgDoc("#4d7fe3", textLines),
-    bib: '<svg width="15" height="15" viewBox="0 0 16 16"><path fill="#9a6fe0" d="M3 3.2c0-.94.76-1.7 1.7-1.7H13v10.3H4.7c-.63 0-1.22.2-1.7.56z"/><path fill="#7c50c9" d="M3 13.3c0-.94.76-1.7 1.7-1.7H13v2.9H4.7A1.7 1.7 0 0 1 3 13.3z"/><path stroke="#fff" stroke-opacity=".8" stroke-width="1" stroke-linecap="round" d="M6 4.6h4.5M6 6.8h4.5"/></svg>',
-    pdf: svgDoc(
-      "#e05252",
-      '<text x="8" y="12.2" text-anchor="middle" font-size="4.6" font-weight="700" fill="#fff" font-family="sans-serif">PDF</text>',
-    ),
-    img: '<svg width="15" height="15" viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" fill="#4ca96b"/><circle cx="5.6" cy="6.2" r="1.3" fill="#fff" fill-opacity=".9"/><path fill="#fff" fill-opacity=".85" d="M3.5 11.5l3-3.4 2.2 2.3 1.9-2 2 3.1z"/></svg>',
-    file: svgDoc("#98a0aa"),
-  };
-
-  function icon(node: TreeNode): string {
-    if (node.is_dir) return expanded.has(node.path) ? ICONS.dirOpen : ICONS.dir;
+  // icono + tinte por tipo de archivo (mismo trazo que el resto de la UI)
+  function icon(node: TreeNode): [Component, string] {
+    if (node.is_dir) return [expanded.has(node.path) ? FolderOpen : Folder, "dir"];
     const ext = node.name.split(".").pop()?.toLowerCase() ?? "";
-    if (["tex", "sty", "cls"].includes(ext)) return ICONS.tex;
-    if (ext === "bib") return ICONS.bib;
-    if (ext === "pdf") return ICONS.pdf;
-    if (["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)) return ICONS.img;
-    return ICONS.file;
+    if (["tex", "sty", "cls"].includes(ext)) return [FileCode, "tex"];
+    if (ext === "bib") return [BookOpen, "bib"];
+    if (ext === "pdf") return [FileText, "pdf"];
+    if (["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)) return [Image, "img"];
+    return [File, "file"];
   }
 
   function onNodeClick(node: TreeNode) {
@@ -137,8 +136,8 @@
 
 <div class="wrap">
   <div class="tree-actions">
-    <button title={t("newFile")} onclick={() => startEdit("newfile")}>{t("newFileShort")}</button>
-    <button title={t("newFolder")} onclick={() => startEdit("newdir")}>{t("newFolderShort")}</button>
+    <button title={t("newFile")} onclick={() => startEdit("newfile")}><FilePlus size={14} />{t("newFileShort")}</button>
+    <button title={t("newFolder")} onclick={() => startEdit("newdir")}><FolderPlus size={14} />{t("newFolderShort")}</button>
   </div>
   <div class="tree">
 
@@ -158,6 +157,7 @@
 
   {#snippet nodes(list: TreeNode[], depth: number)}
     {#each list as node (node.path)}
+      {@const [Icon, kind] = icon(node)}
       {#if editing?.mode === "rename" && editing.target === node.path}
         {@render editRow(depth)}
       {:else}
@@ -172,7 +172,7 @@
           onkeydown={(e) => e.key === "Enter" && onNodeClick(node)}
           oncontextmenu={(e) => onContext(e, node)}
         >
-          <span class="icon">{@html icon(node)}</span>
+          <span class="icon {kind}"><Icon size={15} /></span>
           <span class="name">{node.name}</span>
           {#if app.project?.root_file === node.path}<span class="badge">{t("rootBadge")}</span>{/if}
         </div>
@@ -200,7 +200,8 @@
         if (trashOpen) loadTrash();
       }}
     >
-      {trashOpen ? "▾" : "▸"} 🗑 {t("trash")}
+      {#if trashOpen}<ChevronDown size={13} />{:else}<ChevronRight size={13} />{/if}
+      <Trash size={14} />{t("trash")}
     </button>
     {#if trashOpen}
       {#if !trash.length}
@@ -210,13 +211,14 @@
           {#each trash as entry (entry.id)}
             <div class="trash-item" title={entry.original ?? entry.name}>
               <span class="tname">{entry.name}</span>
-              <button title={t("restore")} onclick={() => trashOp(ipc.restoreTrash(entry.id))}>↩</button>
+              <button title={t("restore")} aria-label={t("restore")} onclick={() => trashOp(ipc.restoreTrash(entry.id))}><ArchiveRestore size={13} /></button>
               <button
                 class="tdanger"
                 title={t("deleteForever")}
+                aria-label={t("deleteForever")}
                 onclick={() => trashOp(ipc.deleteTrashItem(entry.id))}
               >
-                ✕
+                <X size={13} />
               </button>
             </div>
           {/each}
@@ -272,15 +274,22 @@
     flex: none;
   }
   .tree-actions button {
-    font-size: 11px;
-    padding: 2px 8px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11.5px;
+    padding: 3px 8px;
+    color: var(--fg-dim);
+  }
+  .tree-actions button:hover {
+    color: var(--fg);
   }
   .row {
     display: flex;
     align-items: center;
     gap: 5px;
     padding: 3px 8px;
-    cursor: pointer;
+    cursor: var(--cur-pointer, pointer);
     white-space: nowrap;
     overflow: hidden;
   }
@@ -294,6 +303,22 @@
     display: flex;
     align-items: center;
     flex: none;
+    color: var(--fg-dim);
+  }
+  .icon.dir {
+    color: #d3a13a;
+  }
+  .icon.tex {
+    color: var(--accent);
+  }
+  .icon.bib {
+    color: #a37be0;
+  }
+  .icon.pdf {
+    color: #e06060;
+  }
+  .icon.img {
+    color: #4ca96b;
   }
   .name {
     overflow: hidden;
@@ -350,6 +375,9 @@
     flex-direction: column;
   }
   .trash-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     text-align: left;
     padding: 6px 10px;
     font-size: 12px;
@@ -379,8 +407,9 @@
     white-space: nowrap;
   }
   .trash-item button {
-    padding: 1px 6px;
-    font-size: 11px;
+    display: grid;
+    padding: 3px 5px;
+    color: var(--fg-dim);
   }
   .tdanger:hover {
     color: #d33;

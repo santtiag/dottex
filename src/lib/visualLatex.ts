@@ -419,7 +419,7 @@ class ImageWidget extends WidgetType {
   toDOM(view: EditorView) {
     const el = document.createElement("span");
     el.className = "cm-vl-img";
-    el.textContent = `⌧ ${this.path}`;
+    el.textContent = this.path;
     imageUrl(this.path)
       .then((url) => {
         const img = document.createElement("img");
@@ -542,7 +542,7 @@ class PreambleWidget extends WidgetType {
   toDOM(view: EditorView) {
     const el = document.createElement("div");
     el.className = "cm-vl-preamble";
-    el.textContent = `⚙ ${preambleLabel(this.lines)}`;
+    el.textContent = preambleLabel(this.lines);
     revealOnClick(view, el);
     return el;
   }
@@ -677,6 +677,24 @@ const rescanPlugin = ViewPlugin.define((view) => {
   };
 });
 
+/** Icono Lucide como máscara CSS (los widgets son DOM plano, sin Svelte):
+ *  mismo trazo que el resto de la UI y hereda el color del texto. */
+function lucideMask(inner: string) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
+  const mask = `url('data:image/svg+xml,${encodeURIComponent(svg)}') center / contain no-repeat`;
+  return {
+    content: '""',
+    display: "inline-block",
+    width: "1.1em",
+    height: "1.1em",
+    marginRight: "0.4em",
+    verticalAlign: "-0.18em",
+    background: "currentColor",
+    mask,
+    WebkitMask: mask,
+  };
+}
+
 const theme = EditorView.theme({
   ".cm-gutters": { display: "none" },
   ".cm-activeLine": { backgroundColor: "transparent" },
@@ -701,21 +719,24 @@ const theme = EditorView.theme({
     padding: "0 4px",
     fontSize: "0.85em",
   },
-  ".cm-vl-math": { cursor: "pointer" },
+  ".cm-vl-math": { cursor: "var(--cur-pointer, pointer)" },
   ".cm-vl-display": { display: "inline-block", width: "100%", textAlign: "center" },
-  ".cm-vl-img": { cursor: "pointer" },
+  ".cm-vl-img": { cursor: "var(--cur-pointer, pointer)" },
   ".cm-vl-img img": { maxWidth: "100%", background: "white", borderRadius: "4px" },
+  ".cm-vl-missing::before": lucideMask(
+    '<path d="M2 2l20 20M10.41 10.41a2 2 0 1 1-2.83-2.83M13.5 13.5 6 21M18 12l3 3M3.59 3.59A1.99 1.99 0 0 0 3 5v14a2 2 0 0 0 2 2h14c.55 0 1.052-.22 1.41-.59M21 15V5a2 2 0 0 0-2-2H9"/>',
+  ),
   ".cm-vl-missing": {
     color: "var(--fg-dim)",
     border: "1px dashed var(--border)",
     borderRadius: "4px",
     padding: "0 6px",
   },
-  ".cm-vl-table": { cursor: "pointer", display: "inline-block" },
+  ".cm-vl-table": { cursor: "var(--cur-pointer, pointer)", display: "inline-block" },
   ".cm-vl-table table": { borderCollapse: "collapse", margin: "4px 0" },
   ".cm-vl-table td": { border: "1px solid var(--border)", padding: "3px 10px" },
   ".cm-vl-item": { color: "var(--accent)", fontWeight: "700" },
-  ".cm-vl-titleblock": { textAlign: "center", margin: "10px 0 18px", cursor: "pointer" },
+  ".cm-vl-titleblock": { textAlign: "center", margin: "10px 0 18px", cursor: "var(--cur-pointer, pointer)" },
   ".cm-vl-title": { fontSize: "1.8em", fontWeight: "700" },
   ".cm-vl-author": { fontSize: "1.1em", marginTop: "6px" },
   ".cm-vl-inst": { color: "var(--fg-dim)", marginTop: "4px" },
@@ -724,8 +745,11 @@ const theme = EditorView.theme({
     fontSize: "1.4em",
     fontWeight: "700",
     margin: "14px 0 6px",
-    cursor: "pointer",
+    cursor: "var(--cur-pointer, pointer)",
   },
+  ".cm-vl-preamble::before": lucideMask(
+    '<path d="M14 17H5M19 7h-9"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/>',
+  ),
   ".cm-vl-preamble": {
     display: "inline-block",
     color: "var(--fg-dim)",
@@ -735,7 +759,7 @@ const theme = EditorView.theme({
     padding: "4px 12px",
     margin: "0 0 10px",
     fontSize: "12px",
-    cursor: "pointer",
+    cursor: "var(--cur-pointer, pointer)",
   },
 });
 

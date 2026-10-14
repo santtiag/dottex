@@ -1,6 +1,7 @@
 <script lang="ts">
   import { app, gotoLine, syncToPdf } from "./state.svelte";
   import { t } from "./i18n.svelte";
+  import { Hash, Image, ListTodo, Tag } from "@lucide/svelte";
 
   interface Entry {
     line: number; // 1-indexado
@@ -73,7 +74,7 @@
     return cur;
   });
 
-  const ICONS = { section: "§", float: "❑", label: "🏷", todo: "☐" };
+  const ICONS = { section: Hash, float: Image, label: Tag, todo: ListTodo };
 
   function go(e: Entry) {
     gotoLine(e.line);
@@ -88,6 +89,7 @@
     </p>
   {:else}
     {#each entries as e (e.line + e.kind + e.text)}
+      {@const Icon = ICONS[e.kind]}
       <button
         class="entry {e.kind}"
         class:current={e.kind === "section" && e.line === currentLine}
@@ -95,7 +97,7 @@
         onclick={() => go(e)}
         title={t("lineTitle", e.line)}
       >
-        <span class="icon">{ICONS[e.kind]}</span>
+        <span class="icon"><Icon size={13} /></span>
         <span class="text">{e.text}</span>
       </button>
     {/each}
@@ -119,7 +121,7 @@
   }
   .entry {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 6px;
     text-align: left;
     border: none;
@@ -146,8 +148,11 @@
   }
   .icon {
     flex: none;
+    display: grid;
     color: var(--fg-dim);
-    font-size: 11px;
+  }
+  .entry.todo .icon {
+    color: inherit;
   }
   .text {
     overflow: hidden;

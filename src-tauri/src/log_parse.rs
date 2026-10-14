@@ -7,6 +7,9 @@ pub struct Issue {
     pub file: Option<String>,
     pub line: Option<u32>,
     pub message: String,
+    /// Errores: la línea fuente hasta el punto exacto donde TeX se detuvo
+    /// (lo que el log imprime tras `l.N`).
+    pub context: Option<String>,
 }
 
 /// Parser pragmático del log de (La)TeX: errores `! ...` con su `l.N`,
@@ -19,7 +22,7 @@ pub fn parse_log(log: &str) -> Vec<Issue> {
     static LINE_RE: OnceLock<regex::Regex> = OnceLock::new();
     static WARN_RE: OnceLock<regex::Regex> = OnceLock::new();
     static INPUT_LINE_RE: OnceLock<regex::Regex> = OnceLock::new();
-    let line_re = LINE_RE.get_or_init(|| regex::Regex::new(r"^l\.(\d+)").unwrap());
+    let line_re = LINE_RE.get_or_init(|| regex::Regex::new(r"^l\.(\d+) ?(.*)").unwrap());
     let warn_re = WARN_RE
         .get_or_init(|| regex::Regex::new(r"(?:LaTeX|Package\s+\w+)\s+Warning:\s*(.+)").unwrap());
     let input_line_re =
@@ -39,15 +42,17 @@ pub fn parse_log(log: &str) -> Vec<Issue> {
             if msg.starts_with("Emergency stop") {
                 continue;
             }
-            let lnum = lines[i + 1..(i + 12).min(lines.len())]
+            let at = lines[i + 1..(i + 12).min(lines.len())]
                 .iter()
-                .find_map(|l| line_re.captures(l))
-                .and_then(|c| c[1].parse().ok());
+                .find_map(|l| line_re.captures(l));
             issues.push(Issue {
                 severity: "error".into(),
                 file: current_file(&stack),
-                line: lnum,
+                line: at.as_ref().and_then(|c| c[1].parse().ok()),
                 message: msg.to_string(),
+                context: at
+                    .map(|c| c[2].trim_end().to_string())
+                    .filter(|s| !s.is_empty()),
             });
         } else if let Some(c) = warn_re.captures(line) {
             let mut msg = c[1].trim().to_string();
@@ -67,6 +72,7 @@ pub fn parse_log(log: &str) -> Vec<Issue> {
                 file: current_file(&stack),
                 line: lnum,
                 message: msg,
+                context: None,
             });
         } else {
             track_files(line, &mut stack);
@@ -137,6 +143,8 @@ on input line 9.
         assert_eq!(issues[1].severity, "error");
         assert_eq!(issues[1].line, Some(2));
         assert_eq!(issues[1].file.as_deref(), Some("sections/intro.tex"));
+        assert_eq!(issues[1].context.as_deref(), Some("\\badmacro"));
+        assert_eq!(issues[0].context, None);
         assert_eq!(issues[2].line, Some(9), "línea en el renglón siguiente por wrap");
         assert_eq!(issues[2].file.as_deref(), Some("main.tex"));
     }

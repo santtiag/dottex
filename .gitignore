@@ -14,3 +14,8 @@ PROMPT-WEB.md
 .playwright-cli
 .vscode
 testing
+
+# makepkg
+/packaging/arch/pkg
+/packaging/arch/src
+*.pkg.tar.zst

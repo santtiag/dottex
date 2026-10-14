@@ -2,6 +2,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import * as ipc from "./ipc";
 import type { CompileStatus, Issue, ProjectInfo, TreeNode } from "./ipc";
 import { t } from "./i18n.svelte";
+import { startLsp, stopLsp } from "./lsp";
 
 export interface ActiveFile {
   path: string;
@@ -17,14 +18,17 @@ export const app = $state({
   dirty: false,
   compileState: "idle" as "idle" | "compiling" | "ok" | "error",
   issues: [] as Issue[],
+  /// problemas de sintaxis que texlab publica en vivo (todo el proyecto)
+  lspIssues: [] as Issue[],
+  /// cambia cada vez que texlab arranca o cae: el editor se reconecta
+  lspSession: 0,
   log: [] as string[],
   showLog: false,
   /// PDF de vista previa: ruta relativa dentro de .dottex/build + versión
   /// para forzar recarga tras cada compilación.
   pdf: null as { path: string; version: number } | null,
-  auto: true, // vista previa automática al dejar de escribir
   typing: false, // hay una recompilación automática pendiente del debounce
-  goto: null as { line: number; seq: number } | null,
+  goto: null as { line: number; col: number; seq: number } | null,
   /// línea del cursor en el editor (para resaltar el outline)
   cursorLine: 1,
   /// destino de scroll en el visor de vista previa (SyncTeX forward)
@@ -34,6 +38,8 @@ export const app = $state({
     | "light"
     | "dark",
   toast: "",
+  /// hay un proyecto abriéndose (silueta sobre el contenido)
+  opening: false,
 });
 
 /// Preferencias del usuario (persistidas como JSON en localStorage).
@@ -51,6 +57,12 @@ export const settings = $state({
   fontSize: 14,
   fontFamily: "JetBrains Mono",
   lineHeight: 1.5,
+  autoCompile: true, // recompilar al dejar de escribir
+  inlineErrors: true, // mensaje del problema al final de su línea
+  customCursor: true, // cursores propios por zona (cursors.ts)
+  clickFx: true, // anillo sutil al hacer clic
+  pdfInvert: false, // invertir colores del PDF con el tema oscuro
+  projectsDir: "", // última carpeta donde se creó un proyecto nuevo
 });
 
 if (globalThis.localStorage) {
@@ -95,6 +107,7 @@ export async function pickAndOpenProject() {
 }
 
 export async function openProject(path: string) {
+  app.opening = true;
   try {
     const info = await ipc.openProject(path);
     app.project = info;
@@ -105,9 +118,12 @@ export async function openProject(path: string) {
     app.compileState = "idle";
     app.issues = [];
     app.log = [];
+    startLsp(); // sin await: la primera vez descarga texlab
     if (info.root_file) await openFile(info.root_file);
   } catch (e) {
     toast(String(e));
+  } finally {
+    app.opening = false;
   }
 }
 
@@ -115,6 +131,7 @@ export async function openProject(path: string) {
  *  ponytail: no hay IPC close_project; el watcher del backend queda vivo
  *  (inofensivo: los handlers ya toleran proyecto cerrado). */
 export function closeProject() {
+  stopLsp();
   app.project = null;
   app.tree = [];
   app.active = null;
@@ -232,15 +249,20 @@ export async function refreshActiveFromDisk() {
 }
 
 let gotoSeq = 0;
-export function gotoLine(line: number) {
-  app.goto = { line, seq: ++gotoSeq };
+export function gotoLine(line: number, col = 0) {
+  app.goto = { line, col, seq: ++gotoSeq };
+}
+
+/** Problemas del proyecto: sintaxis en vivo (texlab) + última compilación. */
+export function problems(): Issue[] {
+  return [...app.lspIssues, ...app.issues];
 }
 
 /** Salta al archivo/línea de un issue. */
 export async function gotoIssue(issue: Issue) {
   if (!issue.file) return;
   if (app.active?.path !== issue.file) await openFile(issue.file);
-  if (issue.line) gotoLine(issue.line);
+  if (issue.line) gotoLine(issue.line, issue.col);
 }
 
 let pdfTargetSeq = 0;

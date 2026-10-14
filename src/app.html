@@ -4,9 +4,138 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>dottex</title>
+    <!-- Skeleton de arranque: se pinta antes de que exista JS, así que su CSS y su
+         tema van aquí en línea (app.css llega con el bundle). +page.svelte lo
+         retira al montarse. `.sk` es también el bloque fantasma del resto de la
+         app, por eso vive aquí y no en app.css. -->
+    <style>
+      .sk {
+        border-radius: 6px;
+        background: linear-gradient(90deg, var(--panel) 25%, var(--hover) 50%, var(--panel) 75%) 0 0 /
+          200% 100%;
+        animation: sk 1.2s linear infinite;
+      }
+      @keyframes sk {
+        to {
+          background-position: -200% 0;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .sk {
+          animation: none;
+        }
+      }
+      /* mismos colores que app.css, que aún no ha cargado */
+      #boot {
+        --bg: #f8f8fc;
+        --panel: #efeff5;
+        --hover: #e6e6ee;
+        --border: #dcdce4;
+        position: fixed;
+        inset: 0;
+        z-index: 2000;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        transition: opacity 0.15s ease;
+      }
+      .boot-dark #boot {
+        --bg: #17171f;
+        --panel: #1f1f2a;
+        --hover: #2c2c3a;
+        --border: #32323f;
+      }
+      #boot.out {
+        opacity: 0;
+        pointer-events: none;
+      }
+      /* Medidas copiadas de la barra de título (+page.svelte) y del inicio
+         (Welcome.svelte): si cambian allí, cambian aquí. */
+      #boot .bar {
+        height: 40px;
+        background: var(--panel);
+        border-bottom: 1px solid var(--border);
+      }
+      #boot .home {
+        padding: 28px 32px;
+      }
+      #boot .home > * {
+        max-width: 920px;
+        margin-inline: auto;
+      }
+      #boot .hero {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      #boot .hero .grow {
+        flex: 1;
+      }
+      #boot .cols {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+        gap: 28px;
+        margin-top: 24px;
+      }
+      #boot .cols .sk {
+        margin-bottom: 2px;
+      }
+      #boot .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+        gap: 8px;
+      }
+      @media (max-width: 560px) {
+        #boot .home {
+          padding: 20px 16px;
+        }
+        #boot .cols {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+    <script>
+      // el tema del skeleton, antes del primer pintado (misma regla que +page.svelte)
+      try {
+        const theme = localStorage.getItem("dottex-theme") ?? "auto";
+        if (theme === "dark" || (theme === "auto" && matchMedia("(prefers-color-scheme: dark)").matches)) {
+          document.documentElement.classList.add("boot-dark");
+        }
+      } catch {}
+    </script>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">
+    <div id="boot" aria-hidden="true">
+      <div class="bar"></div>
+      <div class="home">
+        <div class="hero">
+          <div class="sk" style="width: 44px; height: 44px; border-radius: 10px"></div>
+          <div class="grow">
+            <div class="sk" style="width: 110px; height: 24px"></div>
+            <div class="sk" style="width: 60%; max-width: 320px; height: 11px; margin-top: 7px"></div>
+          </div>
+          <div class="sk" style="width: 132px; height: 34px; border-radius: 8px"></div>
+          <div class="sk" style="width: 84px; height: 34px; border-radius: 8px"></div>
+        </div>
+        <div class="cols">
+          <div>
+            <div class="sk" style="width: 64px; height: 11px; margin-bottom: 10px"></div>
+            <div class="sk" style="height: 47px"></div>
+            <div class="sk" style="height: 47px"></div>
+            <div class="sk" style="height: 47px"></div>
+          </div>
+          <div>
+            <div class="sk" style="width: 78px; height: 11px; margin-bottom: 10px"></div>
+            <div class="grid">
+              <div class="sk" style="height: 86px; border-radius: 10px"></div>
+              <div class="sk" style="height: 86px; border-radius: 10px"></div>
+              <div class="sk" style="height: 86px; border-radius: 10px"></div>
+              <div class="sk" style="height: 86px; border-radius: 10px"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
     <div style="display: contents">%sveltekit.body%</div>
   </body>
 </html>
